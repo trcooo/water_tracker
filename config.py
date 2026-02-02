@@ -1,9 +1,9 @@
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "7641984012:AAFTSERtmbDiWtr0BAuWldvBz34DX4pDOVE").strip()
 
 # Публичный URL твоего проекта на railway, обязательно https://
-WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://watertracker-production.up.railway.app").strip()
 
 # Путь вебхука
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip()
