@@ -7,7 +7,7 @@ const fg = document.querySelector("circle.fgc");
 const CIRC = 302;
 
 function getTzOffsetMin(){
-  return -new Date().getTimezoneOffset(); // Москва => +180
+  return -new Date().getTimezoneOffset();
 }
 
 function fmtTime(isoUtc){
@@ -84,12 +84,10 @@ function monthName(y, m){
 }
 
 function buildCalendarGrid(y, m){
-  // Monday-first calendar
   const first = new Date(y, m-1, 1);
   const last = new Date(y, m, 0);
   const daysInMonth = last.getDate();
 
-  // JS: getDay() Sunday=0..Saturday=6
   const firstDow = (first.getDay() + 6) % 7; // Monday=0
   const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
 
@@ -162,7 +160,7 @@ function closeModal(){
   qs("#modal").style.display = "none";
 }
 
-/* Stats (7-day bars) */
+/* Stats chart */
 function renderChart7(last7){
   const wrap = qs("#chart7");
   wrap.innerHTML = "";
@@ -170,6 +168,13 @@ function renderChart7(last7){
   const maxVal = Math.max(...last7.map(x => x.goal_ml || 0), ...last7.map(x => x.total_ml || 0), 1);
 
   last7.forEach(x => {
+    const col = document.createElement("div");
+    col.style.flex = "1 1 0";
+    col.style.display = "flex";
+    col.style.flexDirection = "column";
+    col.style.alignItems = "stretch";
+    col.style.gap = "6px";
+
     const bar = document.createElement("div");
     bar.className = "bar";
 
@@ -179,23 +184,40 @@ function renderChart7(last7){
     fill.style.height = `${Math.max(2, Math.min(100, h))}%`;
 
     bar.appendChild(fill);
-
-    const col = document.createElement("div");
-    col.style.flex = "1 1 0";
-    col.style.display = "flex";
-    col.style.flexDirection = "column";
-    col.style.alignItems = "stretch";
-    col.style.gap = "6px";
-
     col.appendChild(bar);
 
     const lbl = document.createElement("div");
     lbl.className = "barLbl";
     const d = new Date(x.date);
     lbl.textContent = d.toLocaleDateString("ru-RU", {weekday:"short"}).replace(".", "");
-
     col.appendChild(lbl);
+
     wrap.appendChild(col);
+  });
+}
+
+/* Achievements */
+function renderAchievements(bestStreak){
+  const grid = qs("#achGrid");
+  const items = [
+    {days: 7,  icon: "🥉", title: "7 дней подряд",  sub: "Бронза"},
+    {days: 14, icon: "🥈", title: "14 дней подряд", sub: "Серебро"},
+    {days: 30, icon: "🥇", title: "30 дней подряд", sub: "Золото"},
+  ];
+
+  grid.innerHTML = "";
+  items.forEach(it => {
+    const unlocked = (bestStreak >= it.days);
+    const div = document.createElement("div");
+    div.className = "ach" + (unlocked ? "" : " locked");
+    div.innerHTML = `
+      <div class="achIcon">${it.icon}</div>
+      <div>
+        <div class="achTitle">${it.title}</div>
+        <div class="achSub">${unlocked ? "Открыто ✅" : `Нужно ${it.days} дней`}</div>
+      </div>
+    `;
+    grid.appendChild(div);
   });
 }
 
@@ -210,26 +232,115 @@ function renderProfile(state){
   qs("#factorInput").value = state.ml_per_kg || 33;
 }
 
+/* Goal toast */
+let toastTimer = null;
+function showGoalToast(){
+  const t = qs("#goalToast");
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = "none"; }, 2500);
+}
+
+/* Confetti */
+const confetti = {
+  canvas: null,
+  ctx: null,
+  w: 0,
+  h: 0,
+  running: false,
+  particles: [],
+  stopAt: 0
+};
+
+function resizeConfetti(){
+  if (!confetti.canvas) return;
+  confetti.w = confetti.canvas.width = window.innerWidth;
+  confetti.h = confetti.canvas.height = window.innerHeight;
+}
+
+function rand(min, max){ return Math.random() * (max - min) + min; }
+
+function startConfetti(durationMs = 1400){
+  if (!confetti.canvas){
+    confetti.canvas = qs("#confetti");
+    confetti.ctx = confetti.canvas.getContext("2d");
+    resizeConfetti();
+    window.addEventListener("resize", resizeConfetti);
+  }
+
+  confetti.particles = [];
+  const colors = ["#1d9bf0", "#22d3ee", "#34d399", "#ffffff", "#60a5fa"];
+  const count = 140;
+
+  for (let i=0;i<count;i++){
+    confetti.particles.push({
+      x: rand(0, confetti.w),
+      y: rand(-confetti.h * 0.2, 0),
+      vx: rand(-1.6, 1.6),
+      vy: rand(2.0, 5.2),
+      r: rand(3, 6),
+      rot: rand(0, Math.PI * 2),
+      vr: rand(-0.12, 0.12),
+      color: colors[Math.floor(rand(0, colors.length))]
+    });
+  }
+
+  confetti.running = true;
+  confetti.stopAt = performance.now() + durationMs;
+  requestAnimationFrame(tickConfetti);
+}
+
+function tickConfetti(ts){
+  if (!confetti.running) return;
+
+  const ctx = confetti.ctx;
+  ctx.clearRect(0, 0, confetti.w, confetti.h);
+
+  confetti.particles.forEach(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.03;        // gravity
+    p.vx *= 0.995;
+    p.rot += p.vr;
+
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(-p.r, -p.r/2, p.r*2, p.r);
+    ctx.restore();
+  });
+
+  // remove off-screen
+  confetti.particles = confetti.particles.filter(p => p.y < confetti.h + 30);
+
+  if (ts > confetti.stopAt || confetti.particles.length === 0){
+    confetti.running = false;
+    ctx.clearRect(0,0,confetti.w, confetti.h);
+    return;
+  }
+
+  requestAnimationFrame(tickConfetti);
+}
+
 /* State render */
+let lastGoalDone = false; // used to detect "just completed"
 function renderState(state){
   setProgress(state.today_ml, state.goal_ml);
   renderEntries(state.entries);
 
-  // header
   const u = tg.initDataUnsafe?.user;
   const name = u ? [u.first_name, u.last_name].filter(Boolean).join(" ") : "Пользователь";
   qs("#userLine").textContent = `${name} • AquaFlow`;
 
   qs("#todayDate").textContent = new Date(state.today_local_date).toLocaleDateString("ru-RU", {day:"numeric", month:"long"});
 
-  // formula line
   if (state.weight_kg){
     qs("#formulaLine").textContent = `Норма: ${state.weight_kg} × ${state.ml_per_kg} = ${state.goal_ml} мл/день`;
   } else {
     qs("#formulaLine").textContent = "Укажи вес в боте: /setweight 70";
   }
 
-  // streak pills
   if (state.current_streak && state.current_streak > 0){
     qs("#streakPill").style.display = "inline-flex";
     qs("#streakVal").textContent = state.current_streak;
@@ -244,22 +355,28 @@ function renderState(state){
     qs("#bestPill").style.display = "none";
   }
 
-  // stats view
+  // stats
   qs("#avg7").textContent = `${state.stats.avg_7} мл`;
   qs("#bestDay").textContent = state.stats.best_day?.date ? `${state.stats.best_day.total_ml} мл` : "—";
   qs("#curStreak").textContent = `${state.stats.current_streak}`;
   qs("#bestStreak").textContent = `${state.stats.best_streak}`;
   renderChart7(state.stats.last7);
 
-  // calendar state
+  // achievements
+  renderAchievements(state.best_streak || 0);
+
+  // calendar init base
   if (calYear === null || calMonth === null){
     const d = new Date(state.today_local_date);
     calYear = d.getFullYear();
     calMonth = d.getMonth() + 1;
   }
 
-  // profile view
+  // profile
   renderProfile(state);
+
+  // compute goal done
+  lastGoalDone = (state.today_ml >= state.goal_ml);
 }
 
 async function loadState(){
@@ -270,14 +387,27 @@ async function loadState(){
 }
 
 async function addWater(amount){
+  // detect completion edge
+  const beforeDone = lastGoalDone;
+
   const data = await api("/api/add", {
     initData: tg.initData,
     tzOffsetMin: getTzOffsetMin(),
     amountMl: amount
   });
+
   tg.HapticFeedback?.impactOccurred("light");
   renderState(data.state);
-  // обновим календарь если открыт
+
+  const afterDone = (data.state.today_ml >= data.state.goal_ml);
+
+  // If just reached the goal: toast + haptic + confetti
+  if (!beforeDone && afterDone){
+    tg.HapticFeedback?.notificationOccurred("success");
+    showGoalToast();
+    startConfetti(1500);
+  }
+
   await loadCalendar(calYear, calMonth);
 }
 
@@ -307,6 +437,12 @@ async function saveProfile(payload){
 async function main(){
   tg.ready();
   tg.expand();
+
+  // optional: make header fit your design
+  try{
+    tg.setHeaderColor?.("#071021");
+    tg.setBackgroundColor?.("#071021");
+  } catch(e){}
 
   initTabs();
 
