@@ -16,7 +16,7 @@
 html, body{
   height:100%;
   width:100%;
-  overflow-x:hidden; /* FIX: no horizontal shift */
+  overflow-x:hidden;
 }
 
 body{
@@ -44,7 +44,7 @@ body{
   padding-top: calc(16px + env(safe-area-inset-top));
   padding-left: calc(16px + env(safe-area-inset-left));
   padding-right: calc(16px + env(safe-area-inset-right));
-  padding-bottom: calc(92px + env(safe-area-inset-bottom)); /* place for tabbar */
+  padding-bottom: calc(92px + env(safe-area-inset-bottom));
 }
 
 /* Confetti canvas */
@@ -64,16 +64,8 @@ body{
   margin: 6px 0 14px;
 }
 
-.brand{
-  font-weight: 900;
-  font-size: 22px;
-  letter-spacing: .2px;
-}
-.sub{
-  font-size: 13px;
-  color: var(--muted);
-  margin-top:2px;
-}
+.brand{ font-weight: 900; font-size: 22px; letter-spacing: .2px; }
+.sub{ font-size: 13px; color: var(--muted); margin-top:2px; }
 
 .iconBtn{
   width: 42px;
@@ -85,11 +77,7 @@ body{
   box-shadow: 0 12px 25px rgba(0,0,0,.25);
   cursor:pointer;
 }
-.smallBtn{
-  width: 36px;
-  height: 36px;
-  border-radius: 14px;
-}
+.smallBtn{ width: 36px; height: 36px; border-radius: 14px; }
 
 .card{
   background: var(--card);
@@ -113,7 +101,6 @@ body{
   align-items:flex-start;
   gap:12px;
 }
-
 .calNav{
   display:flex;
   align-items:center;
@@ -160,10 +147,7 @@ body{
   transform: rotate(-90deg);
 }
 
-circle{
-  fill:none;
-  stroke-width: 12;
-}
+circle{ fill:none; stroke-width: 12; }
 circle.bgc{ stroke: rgba(255,255,255,.10); }
 circle.fgc{
   stroke: var(--blue);
@@ -183,12 +167,7 @@ circle.fgc{
   flex-direction:column;
 }
 
-.pct{
-  font-size: 14px;
-  font-weight: 900;
-  color: rgba(255,255,255,.70);
-  margin-bottom: 2px;
-}
+.pct{ font-size: 14px; font-weight: 900; color: rgba(255,255,255,.70); margin-bottom: 2px; }
 .big{ font-size: 26px; font-weight: 950; }
 .small{ font-size: 12px; color: var(--muted); margin-top: 2px; }
 
@@ -265,7 +244,7 @@ circle.fgc{
 .item .t{ font-weight: 900; }
 .item .s{ font-size:12px; color: var(--muted); }
 
-/* Tabbar — FIXED WITHOUT translate (prevents iOS shift/clipping) */
+/* Tabbar — no translate (prevents iOS shift) */
 .tabbar{
   position: fixed;
   left: calc(12px + env(safe-area-inset-left));
@@ -301,7 +280,6 @@ circle.fgc{
 }
 .tab .ico{ font-size: 16px; }
 .tab .txt{ font-size: 13px; }
-
 .tab.active{
   background: rgba(255,255,255,.10);
   border-color: rgba(255,255,255,.12);
@@ -319,6 +297,7 @@ circle.fgc{
   gap: 10px;
   margin-top: 10px;
 }
+
 .kpi{
   background: rgba(0,0,0,.14);
   border: 1px solid rgba(255,255,255,.10);
@@ -379,9 +358,12 @@ circle.fgc{
   min-width: 0;
 }
 .achIcon{
-  width: 40px; height: 40px;
+  width: 40px;
+  height: 40px;
   border-radius: 14px;
-  display:flex; align-items:center; justify-content:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
   font-size: 18px;
   background: rgba(255,255,255,.08);
   border: 1px solid rgba(255,255,255,.10);
@@ -391,30 +373,43 @@ circle.fgc{
 .achSub{ font-size: 12px; color: var(--muted); margin-top: 2px; }
 .ach.locked{ opacity: .55; filter: grayscale(25%); }
 
-/* Calendar — FULL FIX for iOS overflow */
-#view-calendar .card{ overflow: hidden; } /* FIX: clip any overflow inside calendar card */
+/* ✅ CALENDAR FIX (iOS blur overflow bug) */
+/* The card has backdrop-filter; clipping may fail on iOS. So we clip inside .calClip (no blur). */
+.calClip{
+  margin-top: 10px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 18px;
+  /* force clip on iOS */
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+  mask-image: radial-gradient(white, black);
+}
 
+/* Weekday header */
 .dow{
   display:grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr)); /* FIX */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
-  margin-top: 10px;
   color: rgba(255,255,255,.70);
   font-size: 12px;
   width: 100%;
+  max-width: 100%;
 }
 
+/* Calendar grid */
 .grid{
   margin-top: 10px;
   display:grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr)); /* FIX */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
   width: 100%;
-  touch-action: pan-y; /* FIX: no horizontal drag */
+  max-width: 100%;
+  touch-action: pan-y;
 }
 
 .day{
-  min-width: 0; /* FIX: allow shrink inside grid */
+  min-width: 0;
   border-radius: 16px;
   border: 1px solid rgba(255,255,255,.10);
   background: rgba(0,0,0,.12);
@@ -429,7 +424,9 @@ circle.fgc{
 .day.mute{ opacity:.45; cursor: default; }
 .day .d{ font-weight: 900; }
 .badge{
-  width: 10px; height: 10px; border-radius: 999px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
   background: rgba(255,255,255,.20);
   margin-top: 2px;
   flex: 0 0 auto;
@@ -445,7 +442,13 @@ circle.fgc{
   color: rgba(255,255,255,.75);
   font-size: 12px;
 }
-.dot{ width: 10px; height: 10px; border-radius: 999px; display:inline-block; margin-right: 6px; }
+.dot{
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display:inline-block;
+  margin-right: 6px;
+}
 .dot.none{ background: rgba(255,255,255,.20); }
 .dot.some{ background: rgba(34,211,238,.85); }
 .dot.ok{ background: rgba(52,211,153,.85); }
@@ -562,7 +565,6 @@ circle.fgc{
   .achGrid{ grid-template-columns: 1fr; }
 }
 
-/* Extra small iPhones — calendar fits perfectly */
 @media (max-width: 420px){
   .dow, .grid { gap: 6px; }
   .day { padding: 9px 8px; }

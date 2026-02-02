@@ -122,9 +122,7 @@
           </div>
         </div>
 
-        <div class="achGrid" id="achGrid">
-          <!-- JS renders -->
-        </div>
+        <div class="achGrid" id="achGrid"></div>
       </section>
     </main>
 
@@ -143,15 +141,19 @@
           </div>
         </div>
 
-        <div class="dow">
-          <div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div>
-        </div>
-        <div class="grid" id="calGrid"></div>
+        <!-- IMPORTANT: clip wrapper (fixes iOS overflow with backdrop-filter) -->
+        <div class="calClip">
+          <div class="dow">
+            <div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div>
+          </div>
 
-        <div class="legend">
-          <div class="lg"><span class="dot none"></span> нет данных</div>
-          <div class="lg"><span class="dot some"></span> пил воду</div>
-          <div class="lg"><span class="dot ok"></span> норма</div>
+          <div class="grid" id="calGrid"></div>
+
+          <div class="legend">
+            <div class="lg"><span class="dot none"></span> нет данных</div>
+            <div class="lg"><span class="dot some"></span> пил воду</div>
+            <div class="lg"><span class="dot ok"></span> норма</div>
+          </div>
         </div>
       </section>
     </main>
