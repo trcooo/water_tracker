@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hydro</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div class="bg"></div>
+
+  <div class="wrap">
+    <header class="header">
+      <div>
+        <div class="h1">Hydro</div>
+        <div class="sub" id="userLine">Загрузка…</div>
+      </div>
+      <button class="iconBtn" id="closeBtn" aria-label="close">✕</button>
+    </header>
+
+    <section class="card hero">
+      <div class="droplet">
+        <div class="ring">
+          <svg viewBox="0 0 120 120">
+            <circle class="bgc" cx="60" cy="60" r="48"></circle>
+            <circle class="fgc" cx="60" cy="60" r="48"></circle>
+          </svg>
+          <div class="ringText">
+            <div class="pct" id="pct">0%</div>
+            <div class="big" id="todayMl">0 мл</div>
+            <div class="small" id="goalMl">из 2000 мл</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chips">
+        <button class="chip" data-add="200">+200</button>
+        <button class="chip" data-add="250">+250</button>
+        <button class="chip" data-add="330">+330</button>
+        <button class="chip" data-add="500">+500</button>
+      </div>
+
+      <div class="row">
+        <input id="customMl" class="input" type="number" min="1" max="5000" placeholder="Свое значение, мл" />
+        <button class="btn primary" id="addCustom">Добавить</button>
+      </div>
+
+      <div class="note" id="formulaLine">Норма: вес × 30–35 мл</div>
+    </section>
+
+    <section class="card">
+      <div class="titleRow">
+        <div>
+          <div class="h2">Цель</div>
+          <div class="hint">Можно менять в боте по весу или вручную</div>
+        </div>
+      </div>
+      <div class="row">
+        <input id="goalInput" class="input" type="number" min="500" max="10000" placeholder="2000" />
+        <button class="btn" id="saveGoal">Сохранить</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="titleRow">
+        <div class="h2">Сегодня</div>
+        <div class="hint">Последние записи</div>
+      </div>
+      <div class="list" id="entries">—</div>
+    </section>
+
+    <footer class="footer">
+      <div class="hint">Открывай из чата с ботом — так работает подпись initData.</div>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
