@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hydro</title>
+  <title>AquaFlow</title>
   <link rel="stylesheet" href="/static/style.css" />
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -11,68 +11,207 @@
   <div class="bg"></div>
 
   <div class="wrap">
-    <header class="header">
+    <header class="topbar">
       <div>
-        <div class="h1">Hydro</div>
+        <div class="brand">AquaFlow</div>
         <div class="sub" id="userLine">Загрузка…</div>
       </div>
       <button class="iconBtn" id="closeBtn" aria-label="close">✕</button>
     </header>
 
-    <section class="card hero">
-      <div class="droplet">
-        <div class="ring">
-          <svg viewBox="0 0 120 120">
-            <circle class="bgc" cx="60" cy="60" r="48"></circle>
-            <circle class="fgc" cx="60" cy="60" r="48"></circle>
-          </svg>
-          <div class="ringText">
-            <div class="pct" id="pct">0%</div>
-            <div class="big" id="todayMl">0 мл</div>
-            <div class="small" id="goalMl">из 2000 мл</div>
+    <!-- TODAY -->
+    <main id="view-today" class="view active">
+      <section class="card hero">
+        <div class="heroTop">
+          <div class="ring">
+            <svg viewBox="0 0 120 120">
+              <circle class="bgc" cx="60" cy="60" r="48"></circle>
+              <circle class="fgc" cx="60" cy="60" r="48"></circle>
+            </svg>
+            <div class="ringText">
+              <div class="pct" id="pct">0%</div>
+              <div class="big" id="todayMl">0 мл</div>
+              <div class="small" id="goalMl">из 2000 мл</div>
+            </div>
+          </div>
+
+          <div class="heroSide">
+            <div class="pill streak" id="streakPill" style="display:none">🔥 Стрик: <span id="streakVal">0</span></div>
+            <div class="pill best" id="bestPill" style="display:none">🏆 Лучший: <span id="bestVal">0</span></div>
+            <div class="hint" id="formulaLine">Норма: вес × 30–35 мл</div>
           </div>
         </div>
-      </div>
 
-      <div class="chips">
-        <button class="chip" data-add="200">+200</button>
-        <button class="chip" data-add="250">+250</button>
-        <button class="chip" data-add="330">+330</button>
-        <button class="chip" data-add="500">+500</button>
-      </div>
+        <div class="chips">
+          <button class="chip" data-add="200">+200</button>
+          <button class="chip" data-add="250">+250</button>
+          <button class="chip" data-add="330">+330</button>
+          <button class="chip" data-add="500">+500</button>
+        </div>
 
-      <div class="row">
-        <input id="customMl" class="input" type="number" min="1" max="5000" placeholder="Свое значение, мл" />
-        <button class="btn primary" id="addCustom">Добавить</button>
-      </div>
+        <div class="row">
+          <input id="customMl" class="input" type="number" min="1" max="5000" placeholder="Свое значение, мл" />
+          <button class="btn primary" id="addCustom">Добавить</button>
+        </div>
+      </section>
 
-      <div class="note" id="formulaLine">Норма: вес × 30–35 мл</div>
-    </section>
+      <section class="card">
+        <div class="titleRow">
+          <div>
+            <div class="h2">Сегодня</div>
+            <div class="hint">Последние записи</div>
+          </div>
+          <div class="mini" id="todayDate">—</div>
+        </div>
+        <div class="list" id="entries">—</div>
+      </section>
+    </main>
 
-    <section class="card">
-      <div class="titleRow">
+    <!-- STATS -->
+    <main id="view-stats" class="view">
+      <section class="card">
+        <div class="titleRow">
+          <div>
+            <div class="h2">Статистика</div>
+            <div class="hint">Последние 7 дней</div>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi">
+            <div class="kpiVal" id="avg7">—</div>
+            <div class="kpiLab">среднее / 7д</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiVal" id="bestDay">—</div>
+            <div class="kpiLab">лучший день</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiVal" id="curStreak">—</div>
+            <div class="kpiLab">стрик сейчас</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiVal" id="bestStreak">—</div>
+            <div class="kpiLab">лучший стрик</div>
+          </div>
+        </div>
+
+        <div class="chart" id="chart7"></div>
+      </section>
+    </main>
+
+    <!-- CALENDAR -->
+    <main id="view-calendar" class="view">
+      <section class="card">
+        <div class="titleRow">
+          <div>
+            <div class="h2">Календарь</div>
+            <div class="hint">Тапни на день</div>
+          </div>
+          <div class="calNav">
+            <button class="iconBtn smallBtn" id="prevMonth">‹</button>
+            <div class="mini" id="monthLabel">—</div>
+            <button class="iconBtn smallBtn" id="nextMonth">›</button>
+          </div>
+        </div>
+
+        <div class="dow">
+          <div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div>
+        </div>
+        <div class="grid" id="calGrid"></div>
+
+        <div class="legend">
+          <div class="lg"><span class="dot none"></span> нет данных</div>
+          <div class="lg"><span class="dot some"></span> пил воду</div>
+          <div class="lg"><span class="dot ok"></span> норма</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- PROFILE -->
+    <main id="view-profile" class="view">
+      <section class="card">
+        <div class="h2">Профиль</div>
+        <div class="hint">Вес и коэффициент влияют на норму: вес × (30–35 мл)</div>
+
+        <div class="profileBox">
+          <div class="profileRow">
+            <div class="lab">Вес</div>
+            <div class="val" id="pWeight">—</div>
+          </div>
+          <div class="profileRow">
+            <div class="lab">Коэффициент</div>
+            <div class="val" id="pFactor">—</div>
+          </div>
+          <div class="profileRow">
+            <div class="lab">Норма</div>
+            <div class="val" id="pGoal">—</div>
+          </div>
+        </div>
+
+        <div class="row">
+          <input id="weightInput" class="input" type="number" min="20" max="300" placeholder="Вес, кг (например 70)" />
+          <button class="btn" id="saveWeight">Сохранить</button>
+        </div>
+
+        <div class="row">
+          <input id="factorInput" class="input" type="number" min="30" max="35" placeholder="Коэф, мл/кг (30..35)" />
+          <button class="btn" id="saveFactor">Сохранить</button>
+        </div>
+
+        <div class="row">
+          <input id="goalInput" class="input" type="number" min="500" max="10000" placeholder="Цель, мл (вручную)" />
+          <button class="btn" id="saveGoal">Сохранить цель</button>
+        </div>
+
+        <div class="hint" style="margin-top:10px">
+          Можно менять и в боте: <b>/setweight 70</b>, <b>/setfactor 33</b>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Tabbar -->
+    <nav class="tabbar">
+      <button class="tab active" data-tab="today">
+        <span class="ico">💧</span><span class="txt">Сегодня</span>
+      </button>
+      <button class="tab" data-tab="stats">
+        <span class="ico">📊</span><span class="txt">Статы</span>
+      </button>
+      <button class="tab" data-tab="calendar">
+        <span class="ico">📅</span><span class="txt">Календарь</span>
+      </button>
+      <button class="tab" data-tab="profile">
+        <span class="ico">⚙️</span><span class="txt">Профиль</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal" id="modal" style="display:none">
+    <div class="sheet">
+      <div class="sheetTop">
         <div>
-          <div class="h2">Цель</div>
-          <div class="hint">Можно менять в боте по весу или вручную</div>
+          <div class="h2" id="mDate">—</div>
+          <div class="hint" id="mSub">—</div>
+        </div>
+        <button class="iconBtn smallBtn" id="mClose">✕</button>
+      </div>
+      <div class="sheetBody">
+        <div class="sheetCard">
+          <div class="lab">Выпито</div>
+          <div class="val" id="mTotal">—</div>
+        </div>
+        <div class="sheetCard">
+          <div class="lab">Норма</div>
+          <div class="val" id="mGoal">—</div>
+        </div>
+        <div class="sheetCard">
+          <div class="lab">Статус</div>
+          <div class="val" id="mStatus">—</div>
         </div>
       </div>
-      <div class="row">
-        <input id="goalInput" class="input" type="number" min="500" max="10000" placeholder="2000" />
-        <button class="btn" id="saveGoal">Сохранить</button>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="titleRow">
-        <div class="h2">Сегодня</div>
-        <div class="hint">Последние записи</div>
-      </div>
-      <div class="list" id="entries">—</div>
-    </section>
-
-    <footer class="footer">
-      <div class="hint">Открывай из чата с ботом — так работает подпись initData.</div>
-    </footer>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>
