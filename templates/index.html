@@ -10,7 +10,6 @@
 <body>
   <div class="bg"></div>
 
-  <!-- Confetti canvas -->
   <canvas id="confetti" aria-hidden="true"></canvas>
 
   <!-- Goal toast -->
@@ -21,6 +20,14 @@
         <div class="toastTitle">Цель выполнена!</div>
         <div class="toastSub">Отличная работа 💧</div>
       </div>
+    </div>
+  </div>
+
+  <!-- Undo bar -->
+  <div class="undoBar" id="undoBar" style="display:none">
+    <div class="undoInner">
+      <div class="undoText" id="undoText">Добавлено</div>
+      <button class="undoBtn" id="undoBtn">Отменить (<span id="undoSec">5</span>)</button>
     </div>
   </div>
 
@@ -37,7 +44,7 @@
     <main id="view-today" class="view active">
       <section class="card hero">
         <div class="heroTop">
-          <div class="ring">
+          <div class="ring" id="ring">
             <svg viewBox="0 0 120 120" aria-hidden="true">
               <circle class="bgc" cx="60" cy="60" r="48"></circle>
               <circle class="fgc" cx="60" cy="60" r="48"></circle>
@@ -45,15 +52,25 @@
             <div class="ringText">
               <div class="pct" id="pct">0%</div>
               <div class="big" id="todayMl">0 мл</div>
-              <div class="small" id="goalMl">из 2000 мл</div>
+              <div class="small" id="goalMl">из 0 мл</div>
             </div>
           </div>
 
           <div class="heroSide">
+            <div class="pill" id="levelPill" style="display:none">🏅 <span id="levelVal">—</span></div>
             <div class="pill streak" id="streakPill" style="display:none">🔥 Стрик: <span id="streakVal">0</span></div>
-            <div class="pill best" id="bestPill" style="display:none">🏆 Лучший: <span id="bestVal">0</span></div>
+            <div class="hint" id="nextLine" style="display:none">До следующего уровня: <b id="toNext">—</b> дн.</div>
             <div class="hint" id="formulaLine">Норма: вес × 30–35 мл</div>
           </div>
+        </div>
+
+        <div class="drinkRow">
+          <div class="seg" id="drinkSeg">
+            <button class="segBtn active" data-type="water">💧 Вода</button>
+            <button class="segBtn" data-type="tea">🍵 Чай</button>
+            <button class="segBtn" data-type="coffee">☕ Кофе</button>
+          </div>
+          <div class="hint" id="drinkHint">Вода считается 100%, чай 80%, кофе 60%</div>
         </div>
 
         <div class="chips">
@@ -83,11 +100,37 @@
 
     <!-- STATS -->
     <main id="view-stats" class="view">
+      <section class="card weekCard">
+        <div class="titleRow">
+          <div>
+            <div class="h2">AquaFlow Week</div>
+            <div class="hint">Прогресс за 7 дней</div>
+          </div>
+          <div class="mini" id="weekPctText">—</div>
+        </div>
+
+        <div class="weekTank">
+          <div class="weekWater" id="weekWater">
+            <div class="wave wave1"></div>
+            <div class="wave wave2"></div>
+          </div>
+          <div class="weekOverlay">
+            <div class="weekBig" id="weekBig">—</div>
+            <div class="weekSmall" id="weekSmall">—</div>
+            <div class="weekHint" id="weekHint">—</div>
+          </div>
+        </div>
+      </section>
+
       <section class="card">
         <div class="titleRow">
           <div>
-            <div class="h2">Статистика</div>
+            <div class="h2">Статистика PRO</div>
             <div class="hint">Последние 7 дней</div>
+          </div>
+          <div class="exportBtns">
+            <button class="btn" id="csvBtn">CSV (месяц)</button>
+            <button class="btn" id="pdfBtn">PDF (месяц)</button>
           </div>
         </div>
 
@@ -95,6 +138,14 @@
           <div class="kpi">
             <div class="kpiVal" id="avg7">—</div>
             <div class="kpiLab">среднее / 7д</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiVal" id="median7">—</div>
+            <div class="kpiLab">медиана / 7д</div>
+          </div>
+          <div class="kpi">
+            <div class="kpiVal" id="aboveBelow">—</div>
+            <div class="kpiLab">дней норма / ниже</div>
           </div>
           <div class="kpi">
             <div class="kpiVal" id="bestDay">—</div>
@@ -111,9 +162,17 @@
         </div>
 
         <div class="chart" id="chart7"></div>
+        <div class="hint" style="margin-top:10px">Полупрозрачная линия — скользящее среднее (3 дня).</div>
+
+        <div class="titleRow" style="margin-top:14px">
+          <div>
+            <div class="h2">Напитки (7 дней)</div>
+            <div class="hint">Вклад в общий прогресс</div>
+          </div>
+        </div>
+        <div class="drinkChart" id="drinkChart"></div>
       </section>
 
-      <!-- Achievements -->
       <section class="card">
         <div class="titleRow">
           <div>
@@ -121,7 +180,6 @@
             <div class="hint">Открываются по лучшему стрику</div>
           </div>
         </div>
-
         <div class="achGrid" id="achGrid"></div>
       </section>
     </main>
@@ -132,7 +190,7 @@
         <div class="titleRow">
           <div>
             <div class="h2">Календарь</div>
-            <div class="hint">Тапни на день</div>
+            <div class="hint">Теплокарта — как GitHub</div>
           </div>
           <div class="calNav">
             <button class="iconBtn smallBtn" id="prevMonth">‹</button>
@@ -141,7 +199,7 @@
           </div>
         </div>
 
-        <!-- IMPORTANT: clip wrapper (fixes iOS overflow with backdrop-filter) -->
+        <!-- iOS clip wrapper -->
         <div class="calClip">
           <div class="dow">
             <div>Пн</div><div>Вт</div><div>Ср</div><div>Чт</div><div>Пт</div><div>Сб</div><div>Вс</div>
@@ -151,7 +209,7 @@
 
           <div class="legend">
             <div class="lg"><span class="dot none"></span> нет данных</div>
-            <div class="lg"><span class="dot some"></span> пил воду</div>
+            <div class="lg"><span class="dot some"></span> немного</div>
             <div class="lg"><span class="dot ok"></span> норма</div>
           </div>
         </div>
@@ -195,7 +253,7 @@
         </div>
 
         <div class="hint" style="margin-top:10px">
-          Можно менять и в боте: <b>/setweight 70</b>, <b>/setfactor 33</b>
+          Команды в боте: <b>/setweight 70</b>, <b>/setfactor 33</b>
         </div>
       </section>
     </main>
@@ -206,7 +264,7 @@
         <span class="ico">💧</span><span class="txt">Сегодня</span>
       </button>
       <button class="tab" data-tab="stats">
-        <span class="ico">📊</span><span class="txt">Статы</span>
+        <span class="ico">📊</span><span class="txt">PRO</span>
       </button>
       <button class="tab" data-tab="calendar">
         <span class="ico">📅</span><span class="txt">Календарь</span>

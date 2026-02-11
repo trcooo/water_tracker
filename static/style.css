@@ -44,7 +44,7 @@ body{
   padding-top: calc(16px + env(safe-area-inset-top));
   padding-left: calc(16px + env(safe-area-inset-left));
   padding-right: calc(16px + env(safe-area-inset-right));
-  padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  padding-bottom: calc(110px + env(safe-area-inset-bottom));
 }
 
 /* Confetti canvas */
@@ -133,13 +133,13 @@ body{
   font-weight: 850;
   width: fit-content;
 }
-.pill.best{ opacity: .95; }
 .pill.streak{ box-shadow: 0 10px 22px rgba(255,120,0,.10); }
 
 .ring{
   position: relative;
   width: 215px;
   height: 215px;
+  transform: translateZ(0);
 }
 .ring svg{
   width: 215px;
@@ -170,6 +170,14 @@ circle.fgc{
 .pct{ font-size: 14px; font-weight: 900; color: rgba(255,255,255,.70); margin-bottom: 2px; }
 .big{ font-size: 26px; font-weight: 950; }
 .small{ font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* Reactive jump */
+.ring.jump{ animation: jumpWater .4s ease; }
+@keyframes jumpWater{
+  0% { transform: scale(1); }
+  30% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
 
 .chips{
   display:flex;
@@ -225,6 +233,35 @@ circle.fgc{
   background: linear-gradient(180deg, var(--blue), var(--cyan));
   border: none;
 }
+
+/* Drink selector */
+.drinkRow{ margin-top: 10px; }
+.seg{
+  display:flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.12);
+  overflow:hidden;
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+  mask-image: radial-gradient(white, black);
+}
+.segBtn{
+  flex: 1 1 0;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 14px;
+  background: rgba(255,255,255,.06);
+  padding: 10px 10px;
+  color: rgba(255,255,255,.85);
+  font-weight: 900;
+  cursor:pointer;
+}
+.segBtn.active{
+  background: rgba(255,255,255,.14);
+  color: rgba(255,255,255,.95);
+}
+#drinkHint{ margin-top: 8px; }
 
 .list{
   margin-top:10px;
@@ -313,17 +350,19 @@ circle.fgc{
   display:flex;
   align-items:flex-end;
   gap: 8px;
-  height: 130px;
+  height: 150px;
   padding: 10px;
   border-radius: 18px;
   border: 1px solid rgba(255,255,255,.10);
   background: rgba(0,0,0,.12);
   min-width: 0;
+  position: relative;
+  overflow: hidden;
 }
 .bar{
   flex:1 1 0;
   border-radius: 14px 14px 10px 10px;
-  background: rgba(255,255,255,.10);
+  background: rgba(255,255,255,.08);
   position:relative;
   overflow:hidden;
   min-width: 0;
@@ -339,6 +378,55 @@ circle.fgc{
   color: var(--muted);
   text-align:center;
 }
+
+.maLine{
+  position:absolute;
+  left: 10px;
+  right: 10px;
+  top: 10px;
+  bottom: 10px;
+  pointer-events:none;
+  opacity: .55;
+}
+.maLine svg{ width:100%; height:100%; }
+
+/* Export buttons */
+.exportBtns{ display:flex; gap:8px; flex-wrap:wrap; }
+
+/* Drink breakdown chart */
+.drinkChart{
+  margin-top: 10px;
+  display:flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.drinkCard{
+  flex: 1 1 140px;
+  min-width: 140px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.12);
+  padding: 12px;
+}
+.drinkTop{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-weight: 950;
+}
+.drinkBar{
+  margin-top: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+  overflow:hidden;
+}
+.drinkBar > div{
+  height:100%;
+  width: 0%;
+  background: linear-gradient(180deg, var(--blue), var(--cyan));
+}
+.drinkSub{ margin-top: 8px; font-size: 12px; color: rgba(255,255,255,.75); }
 
 /* Achievements */
 .achGrid{
@@ -374,19 +462,16 @@ circle.fgc{
 .ach.locked{ opacity: .55; filter: grayscale(25%); }
 
 /* ✅ CALENDAR FIX (iOS blur overflow bug) */
-/* The card has backdrop-filter; clipping may fail on iOS. So we clip inside .calClip (no blur). */
 .calClip{
   margin-top: 10px;
   width: 100%;
   max-width: 100%;
   overflow: hidden;
   border-radius: 18px;
-  /* force clip on iOS */
   -webkit-mask-image: -webkit-radial-gradient(white, black);
   mask-image: radial-gradient(white, black);
 }
 
-/* Weekday header */
 .dow{
   display:grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -397,7 +482,6 @@ circle.fgc{
   max-width: 100%;
 }
 
-/* Calendar grid */
 .grid{
   margin-top: 10px;
   display:grid;
@@ -419,10 +503,10 @@ circle.fgc{
   display:flex;
   align-items:flex-start;
   justify-content:space-between;
-  color: rgba(255,255,255,.85);
+  color: rgba(255,255,255,.92);
 }
-.day.mute{ opacity:.45; cursor: default; }
-.day .d{ font-weight: 900; }
+.day.mute{ opacity:.35; cursor: default; }
+.day .d{ font-weight: 950; }
 .badge{
   width: 10px;
   height: 10px;
@@ -431,6 +515,8 @@ circle.fgc{
   margin-top: 2px;
   flex: 0 0 auto;
 }
+
+/* Heatmap: the badge remains, but background intensity is used too */
 .day.some .badge{ background: rgba(34,211,238,.85); }
 .day.ok .badge{ background: rgba(52,211,153,.85); }
 
@@ -551,6 +637,39 @@ circle.fgc{
   to{ transform: translateY(0); opacity: 1; }
 }
 
+/* Undo bar */
+.undoBar{
+  position: fixed;
+  left: calc(12px + env(safe-area-inset-left));
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  max-width: 860px;
+  margin: 0 auto;
+  z-index: 55;
+}
+.undoInner{
+  display:flex;
+  gap: 12px;
+  align-items:center;
+  justify-content:space-between;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(10, 20, 45, .85);
+  box-shadow: 0 18px 45px rgba(0,0,0,.45);
+  backdrop-filter: blur(12px);
+}
+.undoText{ font-weight: 900; }
+.undoBtn{
+  border: none;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255,255,255,.12);
+  color: rgba(255,255,255,.92);
+  font-weight: 950;
+  cursor:pointer;
+}
+
 /* Animations */
 @keyframes pulse{
   0%{ transform: scale(1); }
@@ -558,6 +677,91 @@ circle.fgc{
   100%{ transform: scale(1); }
 }
 .streak{ animation: pulse 1.5s infinite; }
+
+/* ===== WOW: Weekly Water Fill ===== */
+.weekCard { padding: 14px; }
+
+.weekTank{
+  position: relative;
+  margin-top: 12px;
+  height: 260px;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.14);
+  overflow: hidden;
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+  mask-image: radial-gradient(white, black);
+}
+
+.weekWater{
+  position:absolute;
+  left:0; right:0; bottom:0;
+  height: 0%;
+  transition: height 900ms cubic-bezier(.2,.9,.25,1);
+  background: linear-gradient(180deg, rgba(34,211,238,.85), rgba(29,155,240,.90));
+  filter: drop-shadow(0 18px 28px rgba(29,155,240,.20));
+}
+
+.weekOverlay{
+  position:absolute;
+  inset: 0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  text-align:center;
+  padding: 16px;
+}
+
+.weekBig{
+  font-size: 28px;
+  font-weight: 950;
+  letter-spacing: .2px;
+}
+
+.weekSmall{
+  margin-top: 4px;
+  font-size: 13px;
+  color: rgba(255,255,255,.75);
+  font-weight: 850;
+}
+
+.weekHint{
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgba(255,255,255,.70);
+}
+
+/* animated waves */
+.wave{
+  position:absolute;
+  left:-40%;
+  width: 180%;
+  height: 70px;
+  bottom: calc(100% - 40px);
+  opacity: .35;
+  border-radius: 100%;
+  background: rgba(255,255,255,.50);
+  transform: translateY(10px);
+  filter: blur(1px);
+}
+
+.wave1{ animation: waveMove1 3.6s linear infinite; }
+.wave2{
+  opacity: .25;
+  height: 85px;
+  animation: waveMove2 5.2s linear infinite;
+}
+
+@keyframes waveMove1{
+  0%   { transform: translateX(-10%) translateY(12px) rotate(0deg); }
+  100% { transform: translateX(10%)  translateY(12px) rotate(0deg); }
+}
+
+@keyframes waveMove2{
+  0%   { transform: translateX(12%) translateY(14px) rotate(0deg); }
+  100% { transform: translateX(-12%) translateY(14px) rotate(0deg); }
+}
 
 @media (max-width: 520px){
   .sheetBody{ grid-template-columns: 1fr; }
@@ -568,4 +772,6 @@ circle.fgc{
 @media (max-width: 420px){
   .dow, .grid { gap: 6px; }
   .day { padding: 9px 8px; }
+  .weekTank{ height: 230px; }
+  .weekBig{ font-size: 24px; }
 }

@@ -1,507 +1,615 @@
-const tg = window.Telegram.WebApp;
+/* AquaFlow Mini App (no frameworks) */
 
-function qs(s){ return document.querySelector(s); }
-function qsa(s){ return Array.from(document.querySelectorAll(s)); }
-
-const fg = document.querySelector("circle.fgc");
-const CIRC = 302;
-
-function getTzOffsetMin(){
-  return -new Date().getTimezoneOffset();
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
 }
 
-function fmtTime(isoUtc){
-  const d = new Date(isoUtc);
-  return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+const qs = (s) => document.querySelector(s);
+const qsa = (s) => Array.from(document.querySelectorAll(s));
+
+let STATE = null;
+let CURRENT_TAB = "today";
+let CURRENT_MONTH = null;
+let SELECTED_TYPE = "water";
+
+// Undo
+let lastUndo = { entry_id: null, text: "" };
+let undoTimer = null;
+let undoSeconds = 0;
+
+// Confetti
+let confettiParticles = [];
+let confettiAnim = null;
+
+function localISODate(d = new Date()) {
+  // "sv-SE" returns YYYY-MM-DD in local TZ
+  return d.toLocaleDateString("sv-SE");
 }
 
-function pctOf(today, goal){
-  if (!goal || goal <= 0) return 0;
-  return Math.max(0, Math.min(1, today / goal));
+function monthYM(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
 }
 
-function setProgress(today, goal){
-  const p = pctOf(today, goal);
-  fg.style.strokeDashoffset = String(CIRC * (1 - p));
-  qs("#pct").textContent = `${Math.round(p * 100)}%`;
-  qs("#todayMl").textContent = `${today} мл`;
-  qs("#goalMl").textContent = `из ${goal} мл`;
+function formatMonthLabel(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  const months = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+  return `${months[m-1]} ${y} г.`;
 }
 
-function renderEntries(entries){
-  const box = qs("#entries");
-  if (!entries || entries.length === 0){
-    box.textContent = "Пока нет записей.";
-    return;
-  }
-  box.innerHTML = "";
-  entries.forEach(e => {
-    const div = document.createElement("div");
-    div.className = "item";
-    div.innerHTML = `<div class="t">${e.amount_ml} мл</div><div class="s">${fmtTime(e.ts)}</div>`;
-    box.appendChild(div);
+function api(path, payload) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then(async (r) => {
+    if (!r.ok) throw new Error((await r.json()).detail || "API error");
+    return r.json();
   });
 }
 
-async function api(path, payload){
-  const res = await fetch(path, {
-    method:"POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok){
-    const txt = await res.text();
-    throw new Error(txt);
-  }
-  return await res.json();
-}
-
-/* Tabs */
-function setTab(tabName){
+function setTab(tab) {
+  CURRENT_TAB = tab;
   qsa(".view").forEach(v => v.classList.remove("active"));
-  qs(`#view-${tabName}`).classList.add("active");
+  qs(`#view-${tab}`).classList.add("active");
 
-  qsa(".tabbar .tab").forEach(b => b.classList.remove("active"));
-  qs(`.tabbar .tab[data-tab="${tabName}"]`).classList.add("active");
+  qsa(".tab").forEach(b => b.classList.remove("active"));
+  qsa(`.tab[data-tab="${tab}"]`).forEach(b => b.classList.add("active"));
 
-  tg.HapticFeedback?.impactOccurred("light");
+  // ensure no horizontal drift
+  document.documentElement.scrollLeft = 0;
+  document.body.scrollLeft = 0;
+
+  tg?.HapticFeedback?.impactOccurred("light");
 }
 
-function initTabs(){
-  qsa(".tabbar .tab").forEach(btn => {
-    btn.addEventListener("click", () => setTab(btn.dataset.tab));
-  });
+function showGoalToast() {
+  const t = qs("#goalToast");
+  t.style.display = "block";
+  setTimeout(() => { t.style.display = "none"; }, 2200);
 }
 
-/* Calendar */
-let calYear = null;
-let calMonth = null; // 1..12
-let calendarCache = {}; // date -> {total_ml, goal_ml}
+function showUndoBar(text, entry_id) {
+  lastUndo.entry_id = entry_id;
+  lastUndo.text = text;
 
-function monthName(y, m){
-  const d = new Date(y, m-1, 1);
-  return d.toLocaleDateString("ru-RU", {month:"long", year:"numeric"});
-}
+  qs("#undoText").textContent = text;
+  qs("#undoBar").style.display = "block";
 
-function buildCalendarGrid(y, m){
-  const first = new Date(y, m-1, 1);
-  const last = new Date(y, m, 0);
-  const daysInMonth = last.getDate();
+  undoSeconds = 5;
+  qs("#undoSec").textContent = String(undoSeconds);
 
-  const firstDow = (first.getDay() + 6) % 7; // Monday=0
-  const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
-
-  const grid = qs("#calGrid");
-  grid.innerHTML = "";
-
-  for (let i=0; i<totalCells; i++){
-    const cell = document.createElement("div");
-    cell.className = "day";
-
-    const dayNum = i - firstDow + 1;
-    if (dayNum < 1 || dayNum > daysInMonth){
-      cell.classList.add("mute");
-      cell.innerHTML = `<div class="d"> </div><div class="badge"></div>`;
-      grid.appendChild(cell);
-      continue;
+  if (undoTimer) clearInterval(undoTimer);
+  undoTimer = setInterval(() => {
+    undoSeconds -= 1;
+    qs("#undoSec").textContent = String(Math.max(0, undoSeconds));
+    if (undoSeconds <= 0) {
+      hideUndoBar();
     }
+  }, 1000);
+}
 
-    const dateStr = `${y}-${String(m).padStart(2,"0")}-${String(dayNum).padStart(2,"0")}`;
-    const stat = calendarCache[dateStr] || null;
+function hideUndoBar() {
+  qs("#undoBar").style.display = "none";
+  lastUndo.entry_id = null;
+  lastUndo.text = "";
+  if (undoTimer) clearInterval(undoTimer);
+  undoTimer = null;
+}
 
-    let cls = "";
-    let badgeTitle = "нет данных";
-    if (stat){
-      if (stat.total_ml >= stat.goal_ml) { cls = "ok"; badgeTitle = "норма"; }
-      else if (stat.total_ml > 0) { cls = "some"; badgeTitle = "пил воду"; }
-    }
-    if (cls) cell.classList.add(cls);
-
-    cell.innerHTML = `<div class="d">${dayNum}</div><div class="badge" title="${badgeTitle}"></div>`;
-    cell.addEventListener("click", () => openDayModal(dateStr, stat));
-    grid.appendChild(cell);
+async function undoLast() {
+  if (!lastUndo.entry_id) return;
+  try {
+    const res = await api("/api/undo", {
+      initData: tg?.initData || "",
+      entry_id: lastUndo.entry_id,
+      client_date: localISODate(),
+    });
+    hideUndoBar();
+    await refreshState();
+    tg?.HapticFeedback?.notificationOccurred("success");
+  } catch (e) {
+    console.error(e);
+    hideUndoBar();
   }
 }
 
-async function loadCalendar(y, m){
-  qs("#monthLabel").textContent = monthName(y, m);
-  const data = await api("/api/calendar", {
-    initData: tg.initData,
-    tzOffsetMin: getTzOffsetMin(),
-    year: y,
-    month: m
-  });
-  calendarCache = data.days || {};
-  buildCalendarGrid(y, m);
+function setDrinkType(t) {
+  SELECTED_TYPE = t;
+  qsa(".segBtn").forEach(b => b.classList.remove("active"));
+  qsa(`.segBtn[data-type="${t}"]`).forEach(b => b.classList.add("active"));
+  tg?.HapticFeedback?.impactOccurred("light");
 }
 
-/* Modal */
-function openDayModal(dateStr, stat){
-  qs("#modal").style.display = "flex";
-  qs("#mDate").textContent = new Date(dateStr).toLocaleDateString("ru-RU", {day:"numeric", month:"long", year:"numeric"});
+function setRing(total, goal) {
+  const pct = (goal > 0) ? Math.max(0, Math.min(1, total / goal)) : 0;
+  const pctInt = Math.round(pct * 100);
+  qs("#pct").textContent = `${pctInt}%`;
+  qs("#todayMl").textContent = `${total} мл`;
+  qs("#goalMl").textContent = `из ${goal} мл`;
 
-  if (!stat){
-    qs("#mSub").textContent = "Нет данных";
-    qs("#mTotal").textContent = "0 мл";
-    qs("#mGoal").textContent = "—";
-    qs("#mStatus").textContent = "—";
+  // 302 is circumference-ish in our SVG
+  const dash = 302;
+  const offset = dash - (dash * pct);
+  qs("circle.fgc").style.strokeDashoffset = String(offset);
+
+  return pctInt;
+}
+
+function jumpRing() {
+  const ring = qs("#ring");
+  ring.classList.add("jump");
+  setTimeout(()=> ring.classList.remove("jump"), 400);
+}
+
+function renderEntries(entries) {
+  const box = qs("#entries");
+  if (!entries || entries.length === 0) {
+    box.innerHTML = `<div class="item"><div class="t">Пока нет записей.</div><div class="s"></div></div>`;
     return;
   }
 
-  const total = stat.total_ml;
-  const goal = stat.goal_ml;
-  qs("#mSub").textContent = `Прогресс: ${Math.round(pctOf(total, goal)*100)}%`;
-  qs("#mTotal").textContent = `${total} мл`;
-  qs("#mGoal").textContent = `${goal} мл`;
-  qs("#mStatus").textContent = (total >= goal) ? "✅ Норма выполнена" : (total > 0 ? "💧 Есть вода" : "—");
+  box.innerHTML = entries.map(e => {
+    const time = new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const eff = (e.effective_ml !== e.raw_ml) ? ` → ${e.effective_ml}` : "";
+    return `<div class="item">
+      <div>
+        <div class="t">${e.icon} +${e.raw_ml} мл${eff}</div>
+        <div class="s">${time}</div>
+      </div>
+      <div class="s">#${e.id}</div>
+    </div>`;
+  }).join("");
 }
 
-function closeModal(){
-  qs("#modal").style.display = "none";
+function renderAchievements(list) {
+  const box = qs("#achGrid");
+  box.innerHTML = (list || []).map(a => {
+    const cls = a.unlocked ? "ach" : "ach locked";
+    const sub = a.unlocked ? "Открыто ✅" : `Нужно: ${a.threshold} дней`;
+    return `<div class="${cls}">
+      <div class="achIcon">${a.icon}</div>
+      <div>
+        <div class="achTitle">${a.title}</div>
+        <div class="achSub">${a.subtitle} • ${sub}</div>
+      </div>
+    </div>`;
+  }).join("");
 }
 
-/* Stats chart */
-function renderChart7(last7){
-  const wrap = qs("#chart7");
-  wrap.innerHTML = "";
+function renderChart7(last7, movingAvg7) {
+  const chart = qs("#chart7");
+  chart.innerHTML = "";
 
-  const maxVal = Math.max(...last7.map(x => x.goal_ml || 0), ...last7.map(x => x.total_ml || 0), 1);
-
-  last7.forEach(x => {
+  const maxVal = Math.max(1, ...last7.map(d => d.total_ml), ...last7.map(d => d.goal_ml || 0));
+  last7.forEach(d => {
     const col = document.createElement("div");
-    col.style.flex = "1 1 0";
     col.style.display = "flex";
     col.style.flexDirection = "column";
-    col.style.alignItems = "stretch";
-    col.style.gap = "6px";
+    col.style.alignItems = "center";
+    col.style.flex = "1 1 0";
 
     const bar = document.createElement("div");
     bar.className = "bar";
 
     const fill = document.createElement("div");
     fill.className = "barFill";
-    const h = Math.round((x.total_ml / maxVal) * 100);
-    fill.style.height = `${Math.max(2, Math.min(100, h))}%`;
+    fill.style.height = `${Math.round((d.total_ml / maxVal) * 100)}%`;
 
     bar.appendChild(fill);
     col.appendChild(bar);
 
     const lbl = document.createElement("div");
     lbl.className = "barLbl";
-    const d = new Date(x.date);
-    lbl.textContent = d.toLocaleDateString("ru-RU", {weekday:"short"}).replace(".", "");
+    // show day of week (Mon..)
+    const dd = new Date(d.date + "T12:00:00");
+    lbl.textContent = dd.toLocaleDateString("ru-RU", { weekday: "short" }).replace(".", "");
     col.appendChild(lbl);
 
-    wrap.appendChild(col);
+    chart.appendChild(col);
   });
+
+  // moving average line overlay
+  const overlay = document.createElement("div");
+  overlay.className = "maLine";
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("preserveAspectRatio", "none");
+
+  const pts = movingAvg7 || [];
+  const maxMA = maxVal;
+  let dPath = "";
+  pts.forEach((v, i) => {
+    const x = (i / (pts.length - 1)) * 100;
+    const y = 100 - ((v / maxMA) * 100);
+    dPath += (i === 0 ? "M" : "L") + x.toFixed(2) + " " + y.toFixed(2) + " ";
+  });
+
+  const path = document.createElementNS(svgNS, "path");
+  path.setAttribute("d", dPath.trim());
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "rgba(255,255,255,.85)");
+  path.setAttribute("stroke-width", "1.2");
+  svg.appendChild(path);
+  overlay.appendChild(svg);
+  chart.appendChild(overlay);
 }
 
-/* Achievements */
-function renderAchievements(bestStreak){
-  const grid = qs("#achGrid");
+function renderDrinks(drinks7) {
+  const box = qs("#drinkChart");
+  const effTotal = Object.values(drinks7 || {}).reduce((a,x)=>a+(x.effective||0),0) || 1;
+
   const items = [
-    {days: 7,  icon: "🥉", title: "7 дней подряд",  sub: "Бронза"},
-    {days: 14, icon: "🥈", title: "14 дней подряд", sub: "Серебро"},
-    {days: 30, icon: "🥇", title: "30 дней подряд", sub: "Золото"},
+    { type:"water", label:"Вода", icon:"💧" },
+    { type:"tea", label:"Чай", icon:"🍵" },
+    { type:"coffee", label:"Кофе", icon:"☕" },
   ];
 
+  box.innerHTML = items.map(it => {
+    const v = drinks7?.[it.type]?.effective || 0;
+    const pct = Math.round((v / effTotal) * 100);
+    return `<div class="drinkCard">
+      <div class="drinkTop"><span>${it.icon} ${it.label}</span><span>${pct}%</span></div>
+      <div class="drinkBar"><div style="width:${pct}%"></div></div>
+      <div class="drinkSub">${v} мл (в зачёт)</div>
+    </div>`;
+  }).join("");
+}
+
+function renderWeeklyWOW(stats) {
+  const week_total = stats.week_total || 0;
+  const week_goal = stats.week_goal || 0;
+  const pctInt = stats.week_pct || 0;
+
+  const water = qs("#weekWater");
+  water.style.height = `${pctInt}%`;
+
+  qs("#weekPctText").textContent = `${pctInt}%`;
+  qs("#weekBig").textContent = `${pctInt}% недели`;
+  qs("#weekSmall").textContent = `${week_total} / ${week_goal} мл`;
+  const left = Math.max(0, week_goal - week_total);
+  qs("#weekHint").textContent = (left === 0 && week_goal > 0) ? "Идеальная неделя ✅" : `До идеальной недели осталось ${left} мл`;
+
+  // speed up waves after 80%
+  const waves = qsa(".wave");
+  if (pctInt >= 80) {
+    waves.forEach(w => w.style.animationDuration = (w.classList.contains("wave1") ? "2.0s" : "3.0s"));
+  } else {
+    waves.forEach(w => w.style.animationDuration = "");
+  }
+
+  // Confetti at 100%
+  if (pctInt >= 100 && week_goal > 0) {
+    burstConfetti(90);
+  }
+}
+
+function renderCalendar(calData, goal) {
+  qs("#monthLabel").textContent = formatMonthLabel(calData.month);
+  const grid = qs("#calGrid");
   grid.innerHTML = "";
-  items.forEach(it => {
-    const unlocked = (bestStreak >= it.days);
-    const div = document.createElement("div");
-    div.className = "ach" + (unlocked ? "" : " locked");
-    div.innerHTML = `
-      <div class="achIcon">${it.icon}</div>
-      <div>
-        <div class="achTitle">${it.title}</div>
-        <div class="achSub">${unlocked ? "Открыто ✅" : `Нужно ${it.days} дней`}</div>
-      </div>
-    `;
-    grid.appendChild(div);
+
+  calData.days.forEach(d => {
+    const cell = document.createElement("div");
+    cell.className = "day";
+    if (!d.in_month) cell.classList.add("mute");
+
+    const ratio = d.ratio || 0; // 0..2
+    // heat intensity 0..1 based on ratio (cap at 1)
+    const intensity = Math.max(0, Math.min(1, ratio));
+    // set background intensity like github
+    const alpha = d.total_ml <= 0 ? 0.12 : (0.18 + intensity * 0.55);
+    cell.style.background = `rgba(34, 211, 238, ${alpha})`;
+
+    if (d.total_ml > 0 && d.goal_ml > 0) {
+      if (d.total_ml >= d.goal_ml) cell.classList.add("ok");
+      else cell.classList.add("some");
+    }
+
+    const left = document.createElement("div");
+    left.className = "d";
+    left.textContent = String(d.day);
+
+    const badge = document.createElement("div");
+    badge.className = "badge";
+
+    cell.appendChild(left);
+    cell.appendChild(badge);
+
+    cell.addEventListener("click", () => openDayModal(d));
+    grid.appendChild(cell);
   });
 }
 
-/* Profile render */
-function renderProfile(state){
-  qs("#pWeight").textContent = state.weight_kg ? `${state.weight_kg} кг` : "не указан";
-  qs("#pFactor").textContent = `${state.ml_per_kg} мл/кг`;
-  qs("#pGoal").textContent = `${state.goal_ml} мл/день`;
-
-  qs("#goalInput").value = state.goal_ml || 2000;
-  if (state.weight_kg) qs("#weightInput").value = state.weight_kg;
-  qs("#factorInput").value = state.ml_per_kg || 33;
+function openDayModal(d) {
+  // show modal with day stats
+  qs("#modal").style.display = "flex";
+  const dd = new Date(d.date + "T12:00:00");
+  qs("#mDate").textContent = dd.toLocaleDateString("ru-RU", { day:"2-digit", month:"long", year:"numeric" });
+  qs("#mSub").textContent = `Прогресс: ${Math.round((d.goal_ml>0 ? (d.total_ml/d.goal_ml) : 0)*100)}%`;
+  qs("#mTotal").textContent = `${d.total_ml} мл`;
+  qs("#mGoal").textContent = `${d.goal_ml} мл`;
+  qs("#mStatus").textContent = (d.goal_ml>0 && d.total_ml>=d.goal_ml) ? "Норма ✅" : (d.total_ml>0 ? "Есть данные" : "Нет данных");
 }
 
-/* Goal toast */
-let toastTimer = null;
-function showGoalToast(){
-  const t = qs("#goalToast");
-  t.style.display = "block";
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.style.display = "none"; }, 2500);
+function closeModal() {
+  qs("#modal").style.display = "none";
 }
 
-/* Confetti */
-const confetti = {
-  canvas: null,
-  ctx: null,
-  w: 0,
-  h: 0,
-  running: false,
-  particles: [],
-  stopAt: 0
-};
-
-function resizeConfetti(){
-  if (!confetti.canvas) return;
-  confetti.w = confetti.canvas.width = window.innerWidth;
-  confetti.h = confetti.canvas.height = window.innerHeight;
+// ---------------- Confetti ----------------
+function resizeConfetti() {
+  const c = qs("#confetti");
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.floor(window.innerWidth * dpr);
+  c.height = Math.floor(window.innerHeight * dpr);
+  c.style.width = window.innerWidth + "px";
+  c.style.height = window.innerHeight + "px";
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function rand(min, max){ return Math.random() * (max - min) + min; }
-
-function startConfetti(durationMs = 1400){
-  if (!confetti.canvas){
-    confetti.canvas = qs("#confetti");
-    confetti.ctx = confetti.canvas.getContext("2d");
-    resizeConfetti();
-    window.addEventListener("resize", resizeConfetti);
-  }
-
-  confetti.particles = [];
-  const colors = ["#1d9bf0", "#22d3ee", "#34d399", "#ffffff", "#60a5fa"];
-  const count = 140;
+function burstConfetti(count=80) {
+  resizeConfetti();
+  const c = qs("#confetti");
+  const cx = window.innerWidth / 2;
+  const cy = window.innerHeight * 0.25;
 
   for (let i=0;i<count;i++){
-    confetti.particles.push({
-      x: rand(0, confetti.w),
-      y: rand(-confetti.h * 0.2, 0),
-      vx: rand(-1.6, 1.6),
-      vy: rand(2.0, 5.2),
-      r: rand(3, 6),
-      rot: rand(0, Math.PI * 2),
-      vr: rand(-0.12, 0.12),
-      color: colors[Math.floor(rand(0, colors.length))]
+    confettiParticles.push({
+      x: cx,
+      y: cy,
+      vx: (Math.random()*2-1) * (3 + Math.random()*4),
+      vy: - (5 + Math.random()*6),
+      g: 0.22 + Math.random()*0.15,
+      r: 2 + Math.random()*3,
+      life: 80 + Math.random()*40,
+      rot: Math.random()*Math.PI,
+      vr: (Math.random()*2-1)*0.12
     });
   }
 
-  confetti.running = true;
-  confetti.stopAt = performance.now() + durationMs;
-  requestAnimationFrame(tickConfetti);
+  if (!confettiAnim) {
+    confettiAnim = requestAnimationFrame(tickConfetti);
+  }
 }
 
-function tickConfetti(ts){
-  if (!confetti.running) return;
+function tickConfetti() {
+  const c = qs("#confetti");
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0,0,window.innerWidth,window.innerHeight);
 
-  const ctx = confetti.ctx;
-  ctx.clearRect(0, 0, confetti.w, confetti.h);
-
-  confetti.particles.forEach(p => {
+  confettiParticles = confettiParticles.filter(p => p.life > 0);
+  for (const p of confettiParticles) {
+    p.life -= 1;
+    p.vy += p.g;
     p.x += p.vx;
     p.y += p.vy;
-    p.vy += 0.03;        // gravity
-    p.vx *= 0.995;
     p.rot += p.vr;
 
     ctx.save();
     ctx.translate(p.x, p.y);
     ctx.rotate(p.rot);
-    ctx.fillStyle = p.color;
-    ctx.fillRect(-p.r, -p.r/2, p.r*2, p.r);
+    ctx.globalAlpha = Math.max(0, Math.min(1, p.life/120));
+    ctx.fillStyle = "rgba(255,255,255,.85)";
+    ctx.fillRect(-p.r, -p.r, p.r*2.2, p.r*1.3);
     ctx.restore();
-  });
-
-  // remove off-screen
-  confetti.particles = confetti.particles.filter(p => p.y < confetti.h + 30);
-
-  if (ts > confetti.stopAt || confetti.particles.length === 0){
-    confetti.running = false;
-    ctx.clearRect(0,0,confetti.w, confetti.h);
-    return;
   }
 
-  requestAnimationFrame(tickConfetti);
+  if (confettiParticles.length > 0) {
+    confettiAnim = requestAnimationFrame(tickConfetti);
+  } else {
+    confettiAnim = null;
+    ctx.clearRect(0,0,window.innerWidth,window.innerHeight);
+  }
 }
 
-/* State render */
-let lastGoalDone = false; // used to detect "just completed"
-function renderState(state){
-  setProgress(state.today_ml, state.goal_ml);
-  renderEntries(state.entries);
+// ---------------- State rendering ----------------
+function renderState(state) {
+  STATE = state;
+  const user = state.user;
+  const prof = state.profile;
+  const today = state.today;
+  const st = state.stats;
 
-  const u = tg.initDataUnsafe?.user;
-  const name = u ? [u.first_name, u.last_name].filter(Boolean).join(" ") : "Пользователь";
-  qs("#userLine").textContent = `${name} • AquaFlow`;
+  qs("#userLine").textContent = user.username ? `${user.first_name} • @${user.username}` : `${user.first_name}`;
 
-  qs("#todayDate").textContent = new Date(state.today_local_date).toLocaleDateString("ru-RU", {day:"numeric", month:"long"});
+  qs("#todayDate").textContent = new Date(today.date + "T12:00:00").toLocaleDateString("ru-RU", { day:"2-digit", month:"long" });
 
-  if (state.weight_kg){
-    qs("#formulaLine").textContent = `Норма: ${state.weight_kg} × ${state.ml_per_kg} = ${state.goal_ml} мл/день`;
+  // profile block
+  qs("#pWeight").textContent = prof.weight_kg ? `${prof.weight_kg} кг` : "—";
+  qs("#pFactor").textContent = `${prof.factor_ml} мл/кг`;
+  qs("#pGoal").textContent = prof.goal_ml ? `${prof.goal_ml} мл/день` : "—";
+
+  // level + streak
+  if (prof.level && prof.level !== "—") {
+    qs("#levelPill").style.display = "inline-flex";
+    qs("#levelVal").textContent = prof.level;
   } else {
-    qs("#formulaLine").textContent = "Укажи вес в боте: /setweight 70";
+    qs("#levelPill").style.display = "none";
   }
 
-  if (state.current_streak && state.current_streak > 0){
-    qs("#streakPill").style.display = "inline-flex";
-    qs("#streakVal").textContent = state.current_streak;
+  qs("#streakPill").style.display = "inline-flex";
+  qs("#streakVal").textContent = String(st.current_streak || 0);
+
+  if (prof.to_next && prof.to_next > 0) {
+    qs("#nextLine").style.display = "block";
+    qs("#toNext").textContent = String(prof.to_next);
   } else {
-    qs("#streakPill").style.display = "none";
+    qs("#nextLine").style.display = "none";
   }
 
-  if (state.best_streak && state.best_streak > 0){
-    qs("#bestPill").style.display = "inline-flex";
-    qs("#bestVal").textContent = state.best_streak;
-  } else {
-    qs("#bestPill").style.display = "none";
-  }
+  // today ring
+  const pct = setRing(today.total_ml, today.goal_ml);
+
+  // entries
+  renderEntries(today.entries);
 
   // stats
-  qs("#avg7").textContent = `${state.stats.avg_7} мл`;
-  qs("#bestDay").textContent = state.stats.best_day?.date ? `${state.stats.best_day.total_ml} мл` : "—";
-  qs("#curStreak").textContent = `${state.stats.current_streak}`;
-  qs("#bestStreak").textContent = `${state.stats.best_streak}`;
-  renderChart7(state.stats.last7);
+  qs("#avg7").textContent = `${st.avg7} мл`;
+  qs("#median7").textContent = `${st.median7} мл`;
+  qs("#aboveBelow").textContent = `${st.above} / ${st.below}`;
+  qs("#bestDay").textContent = `${st.best_day} мл`;
+  qs("#curStreak").textContent = `${st.current_streak}`;
+  qs("#bestStreak").textContent = `${st.best_streak}`;
 
-  // achievements
-  renderAchievements(state.best_streak || 0);
+  renderChart7(st.last7, st.moving_avg7);
+  renderDrinks(st.drinks7);
+  renderWeeklyWOW(st);
 
-  // calendar init base
-  if (calYear === null || calMonth === null){
-    const d = new Date(state.today_local_date);
-    calYear = d.getFullYear();
-    calMonth = d.getMonth() + 1;
+  renderAchievements(state.achievements);
+
+  // calendar
+  renderCalendar(state.calendar, prof.goal_ml);
+}
+
+async function refreshState() {
+  const payload = {
+    initData: tg?.initData || "",
+    month: CURRENT_MONTH,
+    client_date: localISODate(),
+  };
+  const state = await api("/api/state", payload);
+  renderState(state);
+}
+
+async function addWater(ml) {
+  try {
+    const res = await api("/api/add", {
+      initData: tg?.initData || "",
+      ml: ml,
+      type: SELECTED_TYPE,
+      client_date: localISODate(),
+      client_ts: new Date().toISOString(),
+    });
+
+    jumpRing();
+    tg?.HapticFeedback?.impactOccurred("medium");
+
+    // show goal toast
+    if (res.goal_completed_today) {
+      showGoalToast();
+      burstConfetti(65);
+      tg?.HapticFeedback?.notificationOccurred("success");
+    }
+
+    // weekly confetti - light
+    if (res.week_completed) {
+      burstConfetti(90);
+    }
+
+    // show undo
+    const icon = (SELECTED_TYPE === "tea") ? "🍵" : (SELECTED_TYPE === "coffee") ? "☕" : "💧";
+    showUndoBar(`${icon} Добавлено: +${ml} мл`, res.entry_id);
+
+    await refreshState();
+  } catch (e) {
+    console.error(e);
+    tg?.HapticFeedback?.notificationOccurred("error");
   }
-
-  // profile
-  renderProfile(state);
-
-  // compute goal done
-  lastGoalDone = (state.today_ml >= state.goal_ml);
 }
 
-async function loadState(){
-  return await api("/api/state", {
-    initData: tg.initData,
-    tzOffsetMin: getTzOffsetMin()
-  });
-}
-
-async function addWater(amount){
-  // detect completion edge
-  const beforeDone = lastGoalDone;
-
-  const data = await api("/api/add", {
-    initData: tg.initData,
-    tzOffsetMin: getTzOffsetMin(),
-    amountMl: amount
+function setupEvents() {
+  qs("#closeBtn").addEventListener("click", () => {
+    tg?.close();
   });
 
-  tg.HapticFeedback?.impactOccurred("light");
-  renderState(data.state);
-
-  const afterDone = (data.state.today_ml >= data.state.goal_ml);
-
-  // If just reached the goal: toast + haptic + confetti
-  if (!beforeDone && afterDone){
-    tg.HapticFeedback?.notificationOccurred("success");
-    showGoalToast();
-    startConfetti(1500);
-  }
-
-  await loadCalendar(calYear, calMonth);
-}
-
-async function saveGoal(goal){
-  const data = await api("/api/goal", {
-    initData: tg.initData,
-    tzOffsetMin: getTzOffsetMin(),
-    goalMl: goal
-  });
-  tg.HapticFeedback?.notificationOccurred("success");
-  renderState(data.state);
-  await loadCalendar(calYear, calMonth);
-}
-
-async function saveProfile(payload){
-  const data = await api("/api/profile", {
-    initData: tg.initData,
-    tzOffsetMin: getTzOffsetMin(),
-    ...payload
-  });
-  tg.HapticFeedback?.notificationOccurred("success");
-  renderState(data.state);
-  await loadCalendar(calYear, calMonth);
-}
-
-/* Main */
-async function main(){
-  tg.ready();
-  tg.expand();
-
-  // optional: make header fit your design
-  try{
-    tg.setHeaderColor?.("#071021");
-    tg.setBackgroundColor?.("#071021");
-  } catch(e){}
-
-  initTabs();
-
-  qs("#closeBtn").addEventListener("click", () => tg.close());
-
-  qsa("button[data-add]").forEach(btn => {
-    btn.addEventListener("click", () => addWater(parseInt(btn.dataset.add, 10)));
+  // tabs
+  qsa(".tab").forEach(b => {
+    b.addEventListener("click", () => setTab(b.dataset.tab));
   });
 
+  // chips
+  qsa(".chip").forEach(b => {
+    b.addEventListener("click", () => addWater(parseInt(b.dataset.add, 10)));
+  });
+
+  // custom
   qs("#addCustom").addEventListener("click", () => {
-    const val = parseInt(qs("#customMl").value || "0", 10);
-    if (!val || val <= 0) return;
-    addWater(val);
+    const v = parseInt(qs("#customMl").value || "0", 10);
+    if (v > 0) addWater(v);
     qs("#customMl").value = "";
   });
 
-  qs("#saveGoal").addEventListener("click", () => {
-    const goal = parseInt(qs("#goalInput").value || "0", 10);
-    if (!goal || goal < 500) return;
-    saveGoal(goal);
+  // drink type
+  qsa(".segBtn").forEach(b => {
+    b.addEventListener("click", () => setDrinkType(b.dataset.type));
   });
 
-  qs("#saveWeight").addEventListener("click", () => {
-    const w = parseInt(qs("#weightInput").value || "0", 10);
-    if (!w || w < 20 || w > 300) return;
-    saveProfile({weightKg: w});
+  // profile saves
+  qs("#saveWeight").addEventListener("click", async () => {
+    const v = parseInt(qs("#weightInput").value || "0", 10);
+    await api("/api/profile", { initData: tg?.initData || "", weight_kg: v, client_date: localISODate() });
+    qs("#weightInput").value = "";
+    await refreshState();
   });
 
-  qs("#saveFactor").addEventListener("click", () => {
-    const k = parseInt(qs("#factorInput").value || "0", 10);
-    if (!k || k < 30 || k > 35) return;
-    saveProfile({mlPerKg: k});
+  qs("#saveFactor").addEventListener("click", async () => {
+    const v = parseInt(qs("#factorInput").value || "33", 10);
+    await api("/api/profile", { initData: tg?.initData || "", factor_ml: v, client_date: localISODate() });
+    qs("#factorInput").value = "";
+    await refreshState();
   });
 
-  qs("#mClose").addEventListener("click", closeModal);
-  qs("#modal").addEventListener("click", (e) => {
-    if (e.target && e.target.id === "modal") closeModal();
+  qs("#saveGoal").addEventListener("click", async () => {
+    const v = parseInt(qs("#goalInput").value || "0", 10);
+    await api("/api/profile", { initData: tg?.initData || "", goal_ml: v, client_date: localISODate() });
+    qs("#goalInput").value = "";
+    await refreshState();
   });
 
+  // calendar month nav
   qs("#prevMonth").addEventListener("click", async () => {
-    calMonth -= 1;
-    if (calMonth < 1){ calMonth = 12; calYear -= 1; }
-    await loadCalendar(calYear, calMonth);
+    const [y, m] = CURRENT_MONTH.split("-").map(Number);
+    const d = new Date(y, m-2, 1);
+    CURRENT_MONTH = monthYM(d);
+    await refreshState();
+    tg?.HapticFeedback?.impactOccurred("light");
   });
 
   qs("#nextMonth").addEventListener("click", async () => {
-    calMonth += 1;
-    if (calMonth > 12){ calMonth = 1; calYear += 1; }
-    await loadCalendar(calYear, calMonth);
+    const [y, m] = CURRENT_MONTH.split("-").map(Number);
+    const d = new Date(y, m, 1);
+    CURRENT_MONTH = monthYM(d);
+    await refreshState();
+    tg?.HapticFeedback?.impactOccurred("light");
   });
 
-  try{
-    const state = await loadState();
-    renderState(state);
-    await loadCalendar(calYear, calMonth);
-  } catch(err){
-    console.error(err);
-    alert("Ошибка загрузки. Открой Mini App из Telegram и проверь HTTPS/переменные на Railway.");
-  }
+  // modal
+  qs("#mClose").addEventListener("click", closeModal);
+  qs("#modal").addEventListener("click", (e) => {
+    if (e.target.id === "modal") closeModal();
+  });
+
+  // undo
+  qs("#undoBtn").addEventListener("click", undoLast);
+
+  // export
+  qs("#csvBtn").addEventListener("click", () => downloadExport("csv"));
+  qs("#pdfBtn").addEventListener("click", () => downloadExport("pdf"));
+
+  window.addEventListener("resize", () => resizeConfetti());
 }
 
-main();
+function downloadExport(kind) {
+  const initData = encodeURIComponent(tg?.initData || "");
+  const url = kind === "pdf"
+    ? `/export/pdf?initData=${initData}&month=${CURRENT_MONTH}`
+    : `/export/csv?initData=${initData}&month=${CURRENT_MONTH}`;
+  window.open(url, "_blank");
+}
+
+// ---------------- Boot ----------------
+(async function boot(){
+  try {
+    setupEvents();
+    CURRENT_MONTH = monthYM(new Date());
+    await refreshState();
+  } catch (e) {
+    console.error(e);
+    qs("#userLine").textContent = "Ошибка загрузки. Проверь BOT_TOKEN/доступ.";
+  }
+})();
