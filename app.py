@@ -1,8 +1,9 @@
 import os
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone, date
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Iterator, Optional
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Request, HTTPException
@@ -15,19 +16,46 @@ APP_NAME = "AquaFlow"
 # Опционально: если задан BOT_TOKEN — можно включить строгую проверку initData (не используется в этой версии).
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# SQLite путь. Для Railway Volume ставь: /data/water.db
+# SQLite путь (локально). Для Railway Volume ставь: /data/water.db
 DB_PATH = os.getenv("DB_PATH", "water.db").strip()
 
-db_dir = os.path.dirname(DB_PATH)
-if db_dir:
-    os.makedirs(db_dir, exist_ok=True)
+# PostgreSQL (Railway): прокинь DATABASE_URL через Database Reference Variable.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+USE_POSTGRES = bool(DATABASE_URL)
+
+# Lazy imports for Postgres
+pg_pool = None
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 app = FastAPI(title=APP_NAME)
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 
 
-def db_connect() -> sqlite3.Connection:
+def _ensure_sqlite_dir() -> None:
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+
+def _sql(sqlite_sql: str) -> str:
+    """Translate SQLite placeholder style to current backend."""
+    if USE_POSTGRES:
+        # sqlite uses '?', psycopg uses '%s'
+        return sqlite_sql.replace("?", "%s")
+    return sqlite_sql
+
+
+def _db_commit(conn) -> None:
+    if USE_POSTGRES:
+        # When using autocommit connections, commits are unnecessary.
+        return
+    conn.commit()
+
+
+def _db_connect_sqlite() -> sqlite3.Connection:
+    _ensure_sqlite_dir()
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -35,65 +63,161 @@ def db_connect() -> sqlite3.Connection:
     return conn
 
 
+def _init_pg_pool() -> None:
+    global pg_pool
+    if pg_pool is not None:
+        return
+
+    try:
+        from psycopg_pool import ConnectionPool
+        from psycopg.rows import dict_row
+    except Exception as e:
+        raise RuntimeError(
+            "DATABASE_URL задан, но psycopg не установлен. Добавь 'psycopg[binary,pool]' в requirements.txt"
+        ) from e
+
+    # autocommit=True, чтобы не держать открытые транзакции в пуле
+    pg_pool = ConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=1,
+        max_size=5,
+        kwargs={"row_factory": dict_row, "autocommit": True},
+    )
+
+
+@contextmanager
+def db_conn() -> Iterator[Any]:
+    """Yield a DB connection for current backend."""
+    global pg_pool
+    if USE_POSTGRES:
+        _init_pg_pool()
+        with pg_pool.connection() as conn:
+            yield conn
+    else:
+        conn = _db_connect_sqlite()
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
 def db_init() -> None:
-    conn = db_connect()
-    cur = conn.cursor()
+    """Create tables if they don't exist."""
+    if USE_POSTGRES:
+        with db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    telegram_id BIGINT PRIMARY KEY,
+                    first_name TEXT,
+                    username TEXT,
+                    weight_kg INTEGER DEFAULT 0,
+                    factor_ml INTEGER DEFAULT 33,
+                    goal_ml INTEGER DEFAULT 0,
+                    best_streak INTEGER DEFAULT 0,
+                    current_streak INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS entries (
+                    id BIGSERIAL PRIMARY KEY,
+                    telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                    date TEXT NOT NULL,
+                    ts TEXT NOT NULL,
+                    ml INTEGER NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_entries_user_date
+                ON entries (telegram_id, date);
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_stats (
+                    telegram_id BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+                    date TEXT NOT NULL,
+                    total_ml INTEGER NOT NULL DEFAULT 0,
+                    goal_ml INTEGER NOT NULL DEFAULT 0,
+                    met_goal INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (telegram_id, date)
+                );
+                """
+            )
+        return
 
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
-            first_name TEXT,
-            username TEXT,
-            weight_kg INTEGER DEFAULT 0,
-            factor_ml INTEGER DEFAULT 33,
-            goal_ml INTEGER DEFAULT 0,
-            best_streak INTEGER DEFAULT 0,
-            current_streak INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now'))
+    # SQLite
+    with db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id INTEGER PRIMARY KEY,
+                first_name TEXT,
+                username TEXT,
+                weight_kg INTEGER DEFAULT 0,
+                factor_ml INTEGER DEFAULT 33,
+                goal_ml INTEGER DEFAULT 0,
+                best_streak INTEGER DEFAULT 0,
+                current_streak INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
         )
-        """
-    )
-
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER NOT NULL,
-            date TEXT NOT NULL,     -- YYYY-MM-DD (локальная дата клиента)
-            ts TEXT NOT NULL,       -- ISO timestamp (клиент)
-            ml INTEGER NOT NULL,
-            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                ml INTEGER NOT NULL,
+                FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+            """
         )
-        """
-    )
-
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS daily_stats (
-            telegram_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            total_ml INTEGER NOT NULL DEFAULT 0,
-            goal_ml INTEGER NOT NULL DEFAULT 0,
-            met_goal INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (telegram_id, date),
-            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_stats (
+                telegram_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                total_ml INTEGER NOT NULL DEFAULT 0,
+                goal_ml INTEGER NOT NULL DEFAULT 0,
+                met_goal INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (telegram_id, date),
+                FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+            """
         )
-        """
-    )
-
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 
 @app.on_event("startup")
 def _startup():
+    # Fail fast if DATABASE_URL is set but pool can't be created.
+    if USE_POSTGRES:
+        _init_pg_pool()
     db_init()
+
+
+@app.on_event("shutdown")
+def _shutdown():
+    global pg_pool
+    if pg_pool is not None:
+        pg_pool.close()
+        pg_pool = None
 
 
 # ---------------------------
 # Telegram WebApp initData (упрощённо, без проверки подписи)
 # ---------------------------
+
 def parse_init_data(init_data: str) -> Dict[str, Any]:
     if not init_data:
         raise HTTPException(status_code=401, detail="Missing initData")
@@ -120,6 +244,7 @@ def get_user_identity(init_data: str) -> Tuple[int, str, str]:
 # ---------------------------
 # Logic
 # ---------------------------
+
 def calc_goal(weight_kg: int, factor_ml: int) -> int:
     if weight_kg <= 0:
         return 0
@@ -127,54 +252,61 @@ def calc_goal(weight_kg: int, factor_ml: int) -> int:
     return int(weight_kg * factor_ml)
 
 
-def ensure_user(conn: sqlite3.Connection, tg_id: int, first_name: str, username: str) -> sqlite3.Row:
+def ensure_user(conn, tg_id: int, first_name: str, username: str):
     cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE telegram_id=?", (tg_id,))
+    cur.execute(_sql("SELECT * FROM users WHERE telegram_id=?"), (tg_id,))
     row = cur.fetchone()
     if row:
-        cur.execute("UPDATE users SET first_name=?, username=? WHERE telegram_id=?", (first_name, username, tg_id))
-        conn.commit()
-        cur.execute("SELECT * FROM users WHERE telegram_id=?", (tg_id,))
+        cur.execute(_sql("UPDATE users SET first_name=?, username=? WHERE telegram_id=?"), (first_name, username, tg_id))
+        _db_commit(conn)
+        cur.execute(_sql("SELECT * FROM users WHERE telegram_id=?"), (tg_id,))
         return cur.fetchone()
 
     cur.execute(
-        """
-        INSERT INTO users (telegram_id, first_name, username, weight_kg, factor_ml, goal_ml, best_streak, current_streak)
-        VALUES (?, ?, ?, 0, 33, 0, 0, 0)
-        """,
+        _sql(
+            """
+            INSERT INTO users (telegram_id, first_name, username, weight_kg, factor_ml, goal_ml, best_streak, current_streak)
+            VALUES (?, ?, ?, 0, 33, 0, 0, 0)
+            """
+        ),
         (tg_id, first_name, username),
     )
-    conn.commit()
-    cur.execute("SELECT * FROM users WHERE telegram_id=?", (tg_id,))
+    _db_commit(conn)
+    cur.execute(_sql("SELECT * FROM users WHERE telegram_id=?"), (tg_id,))
     return cur.fetchone()
 
 
-def upsert_daily_stats(conn: sqlite3.Connection, tg_id: int, day: str, goal_ml: int) -> sqlite3.Row:
+def upsert_daily_stats(conn, tg_id: int, day: str, goal_ml: int):
     cur = conn.cursor()
-    cur.execute("SELECT COALESCE(SUM(ml),0) AS total FROM entries WHERE telegram_id=? AND date=?", (tg_id, day))
+    cur.execute(
+        _sql("SELECT COALESCE(SUM(ml),0) AS total FROM entries WHERE telegram_id=? AND date=?"),
+        (tg_id, day),
+    )
     total = int(cur.fetchone()["total"])
     met_goal = 1 if (goal_ml > 0 and total >= goal_ml) else 0
 
     cur.execute(
-        """
-        INSERT INTO daily_stats (telegram_id, date, total_ml, goal_ml, met_goal)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(telegram_id, date) DO UPDATE SET
-          total_ml=excluded.total_ml,
-          goal_ml=excluded.goal_ml,
-          met_goal=excluded.met_goal
-        """,
+        _sql(
+            """
+            INSERT INTO daily_stats (telegram_id, date, total_ml, goal_ml, met_goal)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id, date) DO UPDATE SET
+              total_ml=excluded.total_ml,
+              goal_ml=excluded.goal_ml,
+              met_goal=excluded.met_goal
+            """
+        ),
         (tg_id, day, total, goal_ml, met_goal),
     )
-    conn.commit()
+    _db_commit(conn)
 
-    cur.execute("SELECT * FROM daily_stats WHERE telegram_id=? AND date=?", (tg_id, day))
+    cur.execute(_sql("SELECT * FROM daily_stats WHERE telegram_id=? AND date=?"), (tg_id, day))
     return cur.fetchone()
 
 
-def recompute_streaks(conn: sqlite3.Connection, tg_id: int, today_str: str) -> Tuple[int, int]:
+def recompute_streaks(conn, tg_id: int, today_str: str) -> Tuple[int, int]:
     cur = conn.cursor()
-    cur.execute("SELECT date, met_goal FROM daily_stats WHERE telegram_id=? ORDER BY date ASC", (tg_id,))
+    cur.execute(_sql("SELECT date, met_goal FROM daily_stats WHERE telegram_id=? ORDER BY date ASC"), (tg_id,))
     rows = cur.fetchall()
 
     best = 0
@@ -187,7 +319,7 @@ def recompute_streaks(conn: sqlite3.Connection, tg_id: int, today_str: str) -> T
             run = 0
 
     # current streak ending at today
-    cur.execute("SELECT date, met_goal FROM daily_stats WHERE telegram_id=? ORDER BY date DESC", (tg_id,))
+    cur.execute(_sql("SELECT date, met_goal FROM daily_stats WHERE telegram_id=? ORDER BY date DESC"), (tg_id,))
     rows_desc = cur.fetchall()
     current = 0
     expected = date.fromisoformat(today_str)
@@ -201,32 +333,38 @@ def recompute_streaks(conn: sqlite3.Connection, tg_id: int, today_str: str) -> T
         else:
             break
 
-    cur.execute(
-        "UPDATE users SET current_streak=?, best_streak=MAX(best_streak, ?) WHERE telegram_id=?",
-        (current, best, tg_id),
-    )
-    conn.commit()
+    if USE_POSTGRES:
+        cur.execute(
+            "UPDATE users SET current_streak=%s, best_streak=GREATEST(best_streak, %s) WHERE telegram_id=%s",
+            (current, best, tg_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE users SET current_streak=?, best_streak=MAX(best_streak, ?) WHERE telegram_id=?",
+            (current, best, tg_id),
+        )
+    _db_commit(conn)
 
-    cur.execute("SELECT current_streak, best_streak FROM users WHERE telegram_id=?", (tg_id,))
+    cur.execute(_sql("SELECT current_streak, best_streak FROM users WHERE telegram_id=?"), (tg_id,))
     u = cur.fetchone()
     return int(u["current_streak"]), int(u["best_streak"])
 
 
-def get_today_entries(conn: sqlite3.Connection, tg_id: int, day: str) -> List[Dict[str, Any]]:
+def get_today_entries(conn, tg_id: int, day: str) -> List[Dict[str, Any]]:
     cur = conn.cursor()
-    cur.execute("SELECT * FROM entries WHERE telegram_id=? AND date=? ORDER BY ts DESC, id DESC", (tg_id, day))
+    cur.execute(_sql("SELECT * FROM entries WHERE telegram_id=? AND date=? ORDER BY ts DESC, id DESC"), (tg_id, day))
     out = []
     for r in cur.fetchall():
         out.append({"id": int(r["id"]), "ts": r["ts"], "ml": int(r["ml"])})
     return out
 
 
-def get_last_n_days(conn: sqlite3.Connection, tg_id: int, end_day: str, n: int, goal_ml: int) -> List[Dict[str, Any]]:
+def get_last_n_days(conn, tg_id: int, end_day: str, n: int, goal_ml: int) -> List[Dict[str, Any]]:
     end = date.fromisoformat(end_day)
     days = [(end - timedelta(days=i)).isoformat() for i in range(n - 1, -1, -1)]
     cur = conn.cursor()
     cur.execute(
-        "SELECT date, total_ml, goal_ml, met_goal FROM daily_stats WHERE telegram_id=? AND date>=? AND date<=?",
+        _sql("SELECT date, total_ml, goal_ml, met_goal FROM daily_stats WHERE telegram_id=? AND date>=? AND date<=?"),
         (tg_id, days[0], days[-1]),
     )
     stats_map = {r["date"]: r for r in cur.fetchall()}
@@ -241,7 +379,7 @@ def get_last_n_days(conn: sqlite3.Connection, tg_id: int, end_day: str, n: int, 
     return out
 
 
-def calendar_grid(conn: sqlite3.Connection, tg_id: int, month_ym: str, goal_ml: int) -> Dict[str, Any]:
+def calendar_grid(conn, tg_id: int, month_ym: str, goal_ml: int) -> Dict[str, Any]:
     y, m = map(int, month_ym.split("-"))
     first = date(y, m, 1)
     start = first - timedelta(days=first.weekday())  # Monday=0
@@ -249,7 +387,7 @@ def calendar_grid(conn: sqlite3.Connection, tg_id: int, month_ym: str, goal_ml: 
 
     cur = conn.cursor()
     cur.execute(
-        "SELECT date, total_ml, goal_ml FROM daily_stats WHERE telegram_id=? AND date>=? AND date<=?",
+        _sql("SELECT date, total_ml, goal_ml FROM daily_stats WHERE telegram_id=? AND date>=? AND date<=?"),
         (tg_id, days[0].isoformat(), days[-1].isoformat()),
     )
     stats_map = {r["date"]: r for r in cur.fetchall()}
@@ -262,17 +400,43 @@ def calendar_grid(conn: sqlite3.Connection, tg_id: int, month_ym: str, goal_ml: 
         g = int(r["goal_ml"]) if r else goal_ml
         ratio = (total / g) if g > 0 else 0.0
         out_days.append(
-            {"date": iso, "day": d.day, "in_month": (d.month == m), "total_ml": total, "goal_ml": g, "ratio": min(2.0, max(0.0, ratio))}
+            {
+                "date": iso,
+                "day": d.day,
+                "in_month": (d.month == m),
+                "total_ml": total,
+                "goal_ml": g,
+                "ratio": min(2.0, max(0.0, ratio)),
+            }
         )
     return {"month": month_ym, "days": out_days}
+
+
+def insert_entry(conn, tg_id: int, client_date: str, client_ts: str, ml: int) -> int:
+    cur = conn.cursor()
+    if USE_POSTGRES:
+        cur.execute(
+            "INSERT INTO entries (telegram_id, date, ts, ml) VALUES (%s, %s, %s, %s) RETURNING id",
+            (tg_id, client_date, client_ts, ml),
+        )
+        row = cur.fetchone()
+        return int(row["id"]) if row else 0
+    else:
+        cur.execute(
+            "INSERT INTO entries (telegram_id, date, ts, ml) VALUES (?, ?, ?, ?)",
+            (tg_id, client_date, client_ts, ml),
+        )
+        _db_commit(conn)
+        return int(cur.lastrowid)
 
 
 # ---------------------------
 # Routes
 # ---------------------------
+
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "app": APP_NAME}
+    return {"ok": True, "app": APP_NAME, "db": "postgres" if USE_POSTGRES else "sqlite"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -288,36 +452,35 @@ async def api_state(payload: Dict[str, Any]):
 
     tg_id, first_name, username = get_user_identity(init_data)
 
-    conn = db_connect()
-    user = ensure_user(conn, tg_id, first_name, username)
+    with db_conn() as conn:
+        user = ensure_user(conn, tg_id, first_name, username)
 
-    weight = int(user["weight_kg"] or 0)
-    factor = int(user["factor_ml"] or 33)
-    goal_ml = int(user["goal_ml"] or 0)
-    if goal_ml <= 0 and weight > 0:
-        goal_ml = calc_goal(weight, factor)
-        conn.execute("UPDATE users SET goal_ml=? WHERE telegram_id=?", (goal_ml, tg_id))
-        conn.commit()
+        weight = int(user["weight_kg"] or 0)
+        factor = int(user["factor_ml"] or 33)
+        goal_ml = int(user["goal_ml"] or 0)
+        if goal_ml <= 0 and weight > 0:
+            goal_ml = calc_goal(weight, factor)
+            conn.execute(_sql("UPDATE users SET goal_ml=? WHERE telegram_id=?"), (goal_ml, tg_id))
+            _db_commit(conn)
 
-    today_stats = upsert_daily_stats(conn, tg_id, client_date, goal_ml)
-    cur_streak, best_streak = recompute_streaks(conn, tg_id, client_date)
+        today_stats = upsert_daily_stats(conn, tg_id, client_date, goal_ml)
+        cur_streak, best_streak = recompute_streaks(conn, tg_id, client_date)
 
-    entries = get_today_entries(conn, tg_id, client_date)
-    total_today = int(today_stats["total_ml"])
-    pct_today = int(round((total_today / goal_ml) * 100)) if goal_ml > 0 else 0
-    pct_today = max(0, min(100, pct_today))
+        entries = get_today_entries(conn, tg_id, client_date)
+        total_today = int(today_stats["total_ml"])
+        pct_today = int(round((total_today / goal_ml) * 100)) if goal_ml > 0 else 0
+        pct_today = max(0, min(100, pct_today))
 
-    last7 = get_last_n_days(conn, tg_id, client_date, 7, goal_ml)
-    avg7 = int(round(sum(d["total_ml"] for d in last7) / 7))
+        last7 = get_last_n_days(conn, tg_id, client_date, 7, goal_ml)
+        avg7 = int(round(sum(d["total_ml"] for d in last7) / 7))
 
-    achievements = [
-        {"id": "streak7", "title": "7 дней подряд", "threshold": 7, "icon": "🏅", "unlocked": best_streak >= 7},
-        {"id": "streak14", "title": "14 дней подряд", "threshold": 14, "icon": "🥈", "unlocked": best_streak >= 14},
-        {"id": "streak30", "title": "30 дней подряд", "threshold": 30, "icon": "🥇", "unlocked": best_streak >= 30},
-    ]
+        achievements = [
+            {"id": "streak7", "title": "7 дней подряд", "threshold": 7, "icon": "🏅", "unlocked": best_streak >= 7},
+            {"id": "streak14", "title": "14 дней подряд", "threshold": 14, "icon": "🥈", "unlocked": best_streak >= 14},
+            {"id": "streak30", "title": "30 дней подряд", "threshold": 30, "icon": "🥇", "unlocked": best_streak >= 30},
+        ]
 
-    cal_data = calendar_grid(conn, tg_id, month, goal_ml)
-    conn.close()
+        cal_data = calendar_grid(conn, tg_id, month, goal_ml)
 
     return JSONResponse(
         {
@@ -343,35 +506,42 @@ async def api_add(payload: Dict[str, Any]):
 
     tg_id, first_name, username = get_user_identity(init_data)
 
-    conn = db_connect()
-    user = ensure_user(conn, tg_id, first_name, username)
+    with db_conn() as conn:
+        user = ensure_user(conn, tg_id, first_name, username)
 
-    weight = int(user["weight_kg"] or 0)
-    factor = int(user["factor_ml"] or 33)
-    goal_ml = int(user["goal_ml"] or 0)
-    if goal_ml <= 0 and weight > 0:
-        goal_ml = calc_goal(weight, factor)
-        conn.execute("UPDATE users SET goal_ml=? WHERE telegram_id=?", (goal_ml, tg_id))
-        conn.commit()
+        weight = int(user["weight_kg"] or 0)
+        factor = int(user["factor_ml"] or 33)
+        goal_ml = int(user["goal_ml"] or 0)
+        if goal_ml <= 0 and weight > 0:
+            goal_ml = calc_goal(weight, factor)
+            conn.execute(_sql("UPDATE users SET goal_ml=? WHERE telegram_id=?"), (goal_ml, tg_id))
+            _db_commit(conn)
 
-    before = upsert_daily_stats(conn, tg_id, client_date, goal_ml)
-    before_met = int(before["met_goal"])
+        before = upsert_daily_stats(conn, tg_id, client_date, goal_ml)
+        before_met = int(before["met_goal"])
 
-    cur = conn.cursor()
-    cur.execute("INSERT INTO entries (telegram_id, date, ts, ml) VALUES (?, ?, ?, ?)", (tg_id, client_date, client_ts, ml))
-    entry_id = int(cur.lastrowid)
-    conn.commit()
+        entry_id = insert_entry(conn, tg_id, client_date, client_ts, ml)
+        # Postgres: autocommit connection already committed; SQLite was committed inside insert_entry
+        if USE_POSTGRES:
+            pass
 
-    after = upsert_daily_stats(conn, tg_id, client_date, goal_ml)
-    after_met = int(after["met_goal"])
+        after = upsert_daily_stats(conn, tg_id, client_date, goal_ml)
+        after_met = int(after["met_goal"])
 
-    cur_streak, best_streak = recompute_streaks(conn, tg_id, client_date)
-    conn.close()
+        cur_streak, best_streak = recompute_streaks(conn, tg_id, client_date)
 
     goal_completed_today = (after_met == 1 and before_met == 0)
     return JSONResponse(
-        {"ok": True, "entry_id": entry_id, "today_total": int(after["total_ml"]), "today_goal": goal_ml, "today_met": int(after["met_goal"]),
-         "current_streak": cur_streak, "best_streak": best_streak, "goal_completed_today": goal_completed_today}
+        {
+            "ok": True,
+            "entry_id": entry_id,
+            "today_total": int(after["total_ml"]),
+            "today_goal": goal_ml,
+            "today_met": int(after["met_goal"]),
+            "current_streak": cur_streak,
+            "best_streak": best_streak,
+            "goal_completed_today": goal_completed_today,
+        }
     )
 
 
@@ -384,30 +554,32 @@ async def api_profile(payload: Dict[str, Any]):
     factor_ml = payload.get("factor_ml")
     goal_ml = payload.get("goal_ml")
 
-    conn = db_connect()
-    user = ensure_user(conn, tg_id, first_name, username)
+    with db_conn() as conn:
+        user = ensure_user(conn, tg_id, first_name, username)
 
-    new_weight = int(user["weight_kg"] or 0)
-    new_factor = int(user["factor_ml"] or 33)
-    new_goal = int(user["goal_ml"] or 0)
+        new_weight = int(user["weight_kg"] or 0)
+        new_factor = int(user["factor_ml"] or 33)
+        new_goal = int(user["goal_ml"] or 0)
 
-    if weight_kg is not None:
-        new_weight = max(0, min(300, int(weight_kg)))
-    if factor_ml is not None:
-        new_factor = max(30, min(35, int(factor_ml)))
-    if goal_ml is not None:
-        new_goal = max(0, min(10000, int(goal_ml)))
+        if weight_kg is not None:
+            new_weight = max(0, min(300, int(weight_kg)))
+        if factor_ml is not None:
+            new_factor = max(30, min(35, int(factor_ml)))
+        if goal_ml is not None:
+            new_goal = max(0, min(10000, int(goal_ml)))
 
-    if goal_ml is None and (weight_kg is not None or factor_ml is not None):
-        computed = calc_goal(new_weight, new_factor)
-        if computed > 0:
-            new_goal = computed
+        if goal_ml is None and (weight_kg is not None or factor_ml is not None):
+            computed = calc_goal(new_weight, new_factor)
+            if computed > 0:
+                new_goal = computed
 
-    conn.execute("UPDATE users SET weight_kg=?, factor_ml=?, goal_ml=? WHERE telegram_id=?", (new_weight, new_factor, new_goal, tg_id))
-    conn.commit()
+        conn.execute(
+            _sql("UPDATE users SET weight_kg=?, factor_ml=?, goal_ml=? WHERE telegram_id=?"),
+            (new_weight, new_factor, new_goal, tg_id),
+        )
+        _db_commit(conn)
 
-    today = payload.get("client_date") or datetime.now(timezone.utc).date().isoformat()
-    upsert_daily_stats(conn, tg_id, today, new_goal)
+        today = payload.get("client_date") or datetime.now(timezone.utc).date().isoformat()
+        upsert_daily_stats(conn, tg_id, today, new_goal)
 
-    conn.close()
     return JSONResponse({"ok": True, "weight_kg": new_weight, "factor_ml": new_factor, "goal_ml": new_goal})

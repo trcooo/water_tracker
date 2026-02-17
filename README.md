@@ -1,20 +1,30 @@
-# AquaFlow — previous stable version
+# AquaFlow — Water Tracker (Telegram Mini App)
 
-Стабильная версия Mini App:
+Фичи:
 - трекинг воды
 - формула нормы (вес × 30–35 мл)
 - стрик + лучший стрик
 - достижения 7/14/30
 - статистика за 7 дней
-- календарь (с фикс-обрезкой, чтобы не "съезжал" в Telegram iOS)
-- конфетти + уведомление "Цель выполнена"
+- календарь (фикс для Telegram iOS)
 
-## Railway: чтобы данные не слетали
-1) Добавь Volume/Storage к сервису FastAPI:
-   - Mount path: /data
+## Почему «пропадает прогресс» на Railway
+Railway деплоит приложение в контейнере с **эфемерной файловой системой**. Если ты пишешь SQLite в `water.db` внутри контейнера, то при редеплое/рестарте файл может исчезать → данные «сбрасываются».
+
+## Решение A (рекомендовано): PostgreSQL на Railway
+1) В проекте Railway добавь базу **PostgreSQL** (Project Canvas → `+ New` → Database → PostgreSQL).
+2) В сервисе приложения открой **Variables** и добавь переменную `DATABASE_URL` как **Database Reference Variable** на `DATABASE_URL` твоей Postgres-сервиса.
+3) Деплойни приложение — таблицы создадутся автоматически на старте.
+
+Старт-команда (как в Procfile):
+```
+uvicorn app:app --host 0.0.0.0 --port $PORT
+```
+
+## Решение B (быстрый фикс): SQLite + Volume
+Если хочешь оставить SQLite:
+1) Добавь **Volume/Storage** к сервису приложения
+   - Mount path: `/data`
 2) Variables:
-   - DB_PATH=/data/water.db
-3) Start Command:
-   - uvicorn app:app --host 0.0.0.0 --port $PORT
+   - `DB_PATH=/data/water.db`
 
-BOT_TOKEN в этой версии не обязателен.
